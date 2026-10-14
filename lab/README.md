@@ -4,7 +4,7 @@ Réplica do ambiente STFC para validar o `flux-loadtest` sem tocar na produção
 containers Debian 12 com os mesmos nomes, papéis e finais de IP dos servidores reais:
 OpenSIPS 3.6 e FreeSWITCH 1.11.3 reais com os scripts do Flux (PHP do `xml_curl`, Lua do
 dialplan, schema do banco), Percona XtraDB Cluster 8.4.10, nginx + PHP-FPM 7.3 e a VM de
-teste. Um Zabbix 7.4 recebe as amostras dos testes. Pelo macOS dá para acessar a
+teste. Um Zabbix 7.2.3 (mesma versão da produção) recebe as amostras dos testes. Pelo macOS dá para acessar a
 interface web, o Zabbix e o SSH dos servidores, e registrar SIP devices (softphones).
 
 ## Topologia
@@ -17,9 +17,9 @@ interface web, o Zabbix e o SSH dos servidores, e registrar SIP devices (softpho
 | `banco-slave-stfc` | .164 | .164 | Percona XtraDB Cluster 8.4.10-10 + keepalived (prioridade 100) |
 | `sbc-stfc-interfaceweb` | .165 | .165 | nginx 1.22.1 + PHP-FPM 7.3.33; página PHP com sessão no banco pelo VIP |
 | `vm-teste` | — | .50 | VM originadora: SIPp (originador e atendedor em 5090), wrk, sysbench; o repositório montado em `/opt/flux-loadtest` |
-| `zabbix-server` | — (zbx .10) | .10 | Zabbix server 7.4 (trapper 10051) |
+| `zabbix-server` | — (zbx .10) | .10 | Zabbix server 7.2.3, como em produção (trapper 10051) |
 | `zabbix-web` | — (zbx .11) | .11 | Frontend e API do Zabbix (8080) |
-| `zabbix-db` | — (zbx .5) | — | PostgreSQL 17 do Zabbix; dados no volume `zbx-db` |
+| `zabbix-db` | — (zbx .5) | — | PostgreSQL 16 do Zabbix; dados no volume `flux-stfc-lab_zbx-db-<versão do Zabbix>-pg<versão do PG>` |
 
 Equivalência com a produção:
 
@@ -149,8 +149,11 @@ No frontend: *Monitoramento > Hosts*, grupo `Flux Loadtest`; os gráficos ficam 
 host (`lab-run` tem SIPp, wrk e sysbench). Detalhes dos templates na seção 19 do
 README principal.
 
-O histórico fica no volume `zbx-db` e sobrevive ao `down`; para apagar, use
-`./lab.sh down --zabbix`.
+O histórico fica no volume `flux-stfc-lab_zbx-db-7.2.3-pg16` (um por versão do Zabbix e
+do PostgreSQL, porque nenhum dos dois volta de versão) e sobrevive ao `down`; para
+apagar, use `./lab.sh down --zabbix`. O volume `flux-stfc-lab_zbx-db`, do Zabbix 7.4.15
+usado antes, fica sem uso: confira com `docker volume ls` e remova quando não precisar
+mais do histórico.
 
 ## O que é real e o que é simulado
 
@@ -179,7 +182,7 @@ O histórico fica no volume `zbx-db` e sobrevive ao `down`; para apagar, use
 | OpenSIPS | 3.6.9 | Versão atual do repositório 3.6 (produção: 3.6.8) |
 | Event socket | `0.0.0.0` com ACL `event` | O container não tem IPv6 |
 | Logs | `/var/log/opensips.log`, `/var/log/freeswitch/freeswitch.log` | Sem syslog no container |
-| Zabbix 7.4.15 (imagens oficiais `ubuntu-7.4.15`) + PostgreSQL 17 | Real |
+| Zabbix 7.2.3 (imagens oficiais `ubuntu-7.2.3`, `LAB_ZABBIX_VERSION`) + PostgreSQL 16 (`LAB_ZBX_PG_VERSION`) | Real. PostgreSQL 16 porque o `psql` das imagens 7.2.x não lista bancos no 17 (coluna `daticulocale`) e o entrypoint fica esperando o banco |
 
 O laboratório serve para validar o script (chaves SSH, coleta, limites, relatório,
 cluster, VIP, sessão web), não para medir a capacidade de VoIP.
@@ -334,6 +337,7 @@ README): o caminho não depende de registro nem de caixa postal.
 | Teste | Resultado |
 |---|---|
 | `up` com Zabbix 7.4.15 | Senha do Admin trocada, token criado, 7 templates importados, 8 hosts `lab-*`; segundo `up` só atualiza (idempotente) |
+| Zabbix 7.2.3 (versão de produção), YAML no formato 7.2 | Bootstrap, import dos 7 templates e 8 hosts; 43 gatilhos e nenhum item não suportado; importação de execução antiga (359 valores) e `run` ao vivo com o atendedor (359 valores, nenhum recusado; `flt.uas[received_c]` = 102) |
 | `zabbix send` de execuções de 07/10 | 853 e 319 valores, nenhum recusado; reenvio bloqueado sem `--force` |
 | `run -t sip,web -r 10 -H 10 -w 60` com envio ao vivo | 491 valores, nenhum recusado; itens dependentes sem erro; `flt.result[status]` = `ok`, 220 chamadas, pico de 71 simultâneas |
 | Gatilhos | "Execução interrompida" abre com a importação do failover e fecha com a execução `ok`; watchdog do SIPp e descarte UDP disparam e se recuperam |

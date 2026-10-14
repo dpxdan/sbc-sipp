@@ -99,7 +99,7 @@ Consequências para o teste:
 | `flux-loadtest.sh` | Orquestrador. Ações: `keys`, `check`, `smoke`, `run`, `report`, `zabbix` |
 | `lib/collector.sh` | Coletor de métricas enviado por SSH (`bash -s`); lê `/proc` e comandos de status |
 | `lib/flux_zabbix.py` | Envio ao Zabbix por trapper (ao vivo e importação) e provisionamento dos hosts pela API (seção 19) |
-| `zabbix/flux-loadtest-templates.yaml` | Templates do Zabbix 7.4 (gerado; não editar à mão) |
+| `zabbix/flux-loadtest-templates.yaml` | Templates no formato do Zabbix 7.2 (produção: 7.2.3; gerado, não editar à mão) |
 | `zabbix/gen_templates.py` | Gerador dos templates a partir das colunas do coletor |
 | `scenarios/uac-did.xml.in` | Modelo do cenário SIPp: INVITE -> 200 -> ACK -> RTP opcional -> BYE |
 | `loadtest.conf.example` | Configuração comentada (copiar para `loadtest.conf`) |
@@ -1307,8 +1307,9 @@ saturar, porque nesse caso os números deixam de representar os servidores.
   registra ramais (o registro de devices é validado à parte, `lab/sip/register.xml`).
 - O envio ao Zabbix não usa criptografia (sem TLS/PSK no trapper): use em rede interna
   ou por um proxy Zabbix local à VM de teste.
-- Os templates são gerados no formato do Zabbix 7.4 (`zabbix/gen_templates.py --version`
-  muda só o cabeçalho; outra versão de servidor precisa ser validada no import).
+- Os templates são gerados no formato do Zabbix 7.2, a versão de produção (7.2.3),
+  validada no laboratório. O import aceita formatos de versões anteriores, então o
+  mesmo YAML entra num 7.4; `zabbix/gen_templates.py --version` muda só o cabeçalho.
 
 ## 19. Zabbix
 

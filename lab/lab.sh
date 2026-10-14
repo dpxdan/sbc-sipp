@@ -47,7 +47,8 @@ Uso: $0 <acao> [opcoes]
   shell                 abre um shell na vm-teste (onde o flux-loadtest roda)
   interna | externa     liga/desliga a vm-teste da rede interna (necessario para --tests mysql)
   down [--zabbix]       remove os containers e as redes (dados do laboratorio sao efemeros);
-                        --zabbix apaga tambem o historico do Zabbix (volume zbx-db)
+                        --zabbix apaga tambem o historico do Zabbix (volume zbx-db da versao
+                        LAB_ZABBIX_VERSION, padrao 7.2.3 = producao)
 
 Dentro da vm-teste:
   cd /opt/flux-loadtest && ./flux-loadtest.sh check -c /etc/flux-loadtest/loadtest.conf

@@ -15,7 +15,10 @@ Os templates descrevem os dados que o lib/flux_zabbix.py envia por trapper:
 Cada item final e DEPENDENT do master, extraido por JSONPath; campo ausente no JSON
 descarta o valor (um mesmo master serve a varios papeis e alvos).
 
-Uso: python3 zabbix/gen_templates.py [--version 7.4] > zabbix/flux-loadtest-templates.yaml
+Uso: python3 zabbix/gen_templates.py [--version 7.2] > zabbix/flux-loadtest-templates.yaml
+
+Padrao 7.2: versao do Zabbix de producao (7.2.3). O import aceita o formato da propria
+versao ou de versoes anteriores, entao o YAML 7.2 tambem entra num Zabbix 7.4.
 Somente biblioteca padrao (sem PyYAML): o YAML e escrito com aspas simples em todos os
 textos, que e o formato aceito pelo import do Zabbix.
 """
@@ -637,7 +640,7 @@ def valuemaps_block(y, tpl, names):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
-    ap.add_argument("--version", default="7.4", help="versao do formato de exportacao (padrao 7.4)")
+    ap.add_argument("--version", default="7.2", help="versao do formato de exportacao (padrao 7.2, producao)")
     args = ap.parse_args()
     sys.stdout.write(emit(args.version))
 

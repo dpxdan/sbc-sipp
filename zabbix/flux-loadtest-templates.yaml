@@ -1,5 +1,5 @@
 zabbix_export:
-  version: '7.4'
+  version: '7.2'
   template_groups:
     - uuid: 93f8f439d8444a1c89383a7bfd007f8e
       name: 'Templates/Flux Loadtest'

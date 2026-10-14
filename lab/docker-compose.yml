@@ -28,8 +28,10 @@ networks:
         - subnet: 172.30.10.0/24
 
 volumes:
-  # Historico do Zabbix sobrevive ao "lab.sh down" (apagar: lab.sh down --zabbix)
+  # Historico do Zabbix sobrevive ao "lab.sh down" (apagar: lab.sh down --zabbix).
+  # Um volume por versao do Zabbix e do PostgreSQL: nenhum dos dois volta de versao
   zbx-db:
+    name: flux-stfc-lab_zbx-db-${LAB_ZABBIX_VERSION:-7.2.3}-pg${LAB_ZBX_PG_VERSION:-16}
 
 # Token da SignalWire para os pacotes do FreeSWITCH: entra so no build (secret do BuildKit)
 secrets:
@@ -154,7 +156,8 @@ services:
 
   # ------------------------------------------------------------------ Zabbix
   zabbix-db:
-    image: postgres:17-bookworm
+    # PostgreSQL 16: o psql das imagens 7.2.x nao lista bancos no 17 (coluna daticulocale)
+    image: postgres:${LAB_ZBX_PG_VERSION:-16}-bookworm
     hostname: zabbix-db
     environment:
       POSTGRES_DB: zabbix
@@ -170,7 +173,7 @@ services:
       zbx: { ipv4_address: 172.30.10.5 }
 
   zabbix-server:
-    image: zabbix/zabbix-server-pgsql:ubuntu-${LAB_ZABBIX_VERSION:-7.4.15}
+    image: zabbix/zabbix-server-pgsql:ubuntu-${LAB_ZABBIX_VERSION:-7.2.3}
     hostname: zabbix-server
     depends_on:
       zabbix-db: { condition: service_healthy }
@@ -188,7 +191,7 @@ services:
       stfc_pub: { ipv4_address: 172.30.177.10 }
 
   zabbix-web:
-    image: zabbix/zabbix-web-nginx-pgsql:ubuntu-${LAB_ZABBIX_VERSION:-7.4.15}
+    image: zabbix/zabbix-web-nginx-pgsql:ubuntu-${LAB_ZABBIX_VERSION:-7.2.3}
     hostname: zabbix-web
     depends_on: [zabbix-server]
     environment:
