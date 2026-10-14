@@ -1,0 +1,164 @@
+# flux-loadtest - configuracao (WEB-1437)
+#
+# Preenchido para o ambiente STFC (todos os servidores em Debian 12):
+#   sbc-stfc-1             200.159.177.163 / 172.17.4.163  OpenSIPS 3.6.8 (SIP 5060) + FreeSWITCH 1.11.3 (SIP 5070)
+#   sbc-stfc-02            200.159.177.162 / 172.17.4.162  FreeSWITCH 1.11.3 (SIP 5070)
+#   banco-master-sbc-stfc  200.159.177.161 / 172.17.4.161  Percona XtraDB Cluster 8.4.10-10.1
+#   banco-slave-stfc       200.159.177.164 / 172.17.4.164  Percona XtraDB Cluster 8.4.10-10.1
+#   sbc-stfc-interfaceweb  200.159.177.165 / 172.17.4.165  nginx 1.22.1 + PHP-FPM 7.3.33
+#   VIP do banco (keepalived): 172.17.4.100 (os servidores usam o VIP)
+#
+# A VM de teste fora da rede 172.17.4.0/24 usa os IPs publicos (abaixo). Numa VM
+# dentro da rede interna, troque pelos 172.17.4.x.
+#
+# Copie para loadtest.conf (mesmo diretorio do script) ou passe com -c.
+# Formato: CHAVE=valor, uma por linha, sem espacos ao redor do "=".
+# Aspas envolventes sao removidas. Comentarios so em linhas proprias.
+# O arquivo e lido como dado (nao e executado): chaves desconhecidas sao recusadas.
+
+# ------------------------------------------------------------------ SSH
+# Usuario com chave sem senha nos 6 servidores. Nao precisa ser root se os
+# comandos de status abaixo funcionarem para ele (use sudo -n quando necessario).
+# A chave pode ser criada e instalada pelo proprio script:
+#   ./flux-loadtest.sh keys setup --write-config            (senha do SSH_USER)
+#   ./flux-loadtest.sh keys setup --via admin --write-config (admin + sudo)
+SSH_USER=loadtest
+SSH_KEY=/etc/flux-loadtest/id_ed25519
+SSH_PORT=22
+SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=yes"
+# known_hosts dedicado (vazio = ~/.ssh/known_hosts). Preenchido por: keys trust
+SSH_KNOWN_HOSTS=/etc/flux-loadtest/known_hosts
+# Parametros da chave gerada por "keys create": ed25519 (padrao) ou rsa (4096)
+SSH_KEY_TYPE=ed25519
+# Comentario da chave (vazio = flux-loadtest@<host>-<data>)
+SSH_KEY_COMMENT=
+# from= do authorized_keys (vazio = IP de origem da rota ate cada servidor).
+# Ex.: 10.0.0.50 ou 10.0.0.50,10.0.0.51
+SSH_KEY_FROM=
+
+# ------------------------------------------------------------------ servidores
+# IP de gerencia (alcancavel por SSH a partir da VM de teste).
+# sbc-stfc-1 aparece duas vezes (OpenSIPS e fs1): sao dois coletores no mesmo
+# servidor, um com as metricas do OpenSIPS e outro com as do FreeSWITCH.
+OPENSIPS_HOST=200.159.177.163
+FS_HOSTS="200.159.177.163 200.159.177.162"
+DB_HOSTS="200.159.177.161 200.159.177.164"
+WEB_HOST=200.159.177.165
+
+# ------------------------------------------------------------------ SIP
+# Face do OpenSIPS que recebe as operadoras (socket publico), IP:porta.
+# Teste direto num FreeSWITCH (sem load_balancer): 200.159.177.163:5070 ou 200.159.177.162:5070
+SIP_TARGET=200.159.177.163:5060
+# IP de origem da VM de teste. Vazio = IP da rota para SIP_TARGET.
+# Este IP precisa estar na tabela address do OpenSIPS, grupo de operadoras
+# (FLUX_GRP_CARRIERS = 10), seguido de: opensips-cli -x mi address_reload
+SIP_LOCAL_IP=
+SIP_LOCAL_PORT=5060
+# Um DID por linha (so digitos, opcional +). DIDs que caem na caixa postal.
+# Modelo: dids.txt.example (aceita comentarios # e linhas vazias)
+DID_FILE=/etc/flux-loadtest/dids.txt
+# Numero de A das chamadas de teste (facilita filtrar CDRs depois)
+CALLER_ID=551130009999
+# Porta base de RTP na VM de teste (SIPp aloca a partir dela)
+RTP_PORT_BASE=20000
+# Tempo maximo esperando o 200 OK do INVITE (ms); depois a chamada conta como falha
+SIP_RECV_TIMEOUT_MS=60000
+
+# ------------------------------------------------------------------ FreeSWITCH
+# Executado no servidor FS pelo usuario SSH
+FS_CLI_CMD="sudo -n fs_cli -x"
+# Senha do event socket quando difere do padrao ClueCon. Arquivo na VM de teste,
+# so a senha na 1a linha, chmod 600. Vazio = o fs_cli usa a propria configuracao.
+# Alternativa sem arquivo: ./flux-loadtest.sh check|run --fs-password (pede no terminal).
+# A senha vai pelo stdin do SSH e entra como "fs_cli -p ..." no servidor; para nao
+# passar a senha pelo script, crie no servidor ~/.fs_cli_conf (do usuario que roda o
+# fs_cli; com sudo, /root/.fs_cli_conf), chmod 600:
+#   [default]
+#   password => SENHA
+FS_CLI_PASSWORD_FILE=
+# Particao onde a caixa postal grava (vigiada pelo GUARD_MIN_DISK_FREE_PCT)
+FS_DISK_PATH=/var/lib/freeswitch
+# Caixas postais de teste para contar mensagens antes/depois (ramal@dominio, separados por espaco)
+VM_BOXES=
+# Usados so na estimativa de disco do plano (saudacao antes do beep, bytes/s do WAV)
+VM_GREETING_SECONDS=8
+VM_BYTES_PER_SECOND=16000
+
+# ------------------------------------------------------------------ OpenSIPS
+OPENSIPS_MI_CMD="sudo -n opensips-cli -x mi"
+
+# ------------------------------------------------------------------ MySQL (coleta passiva)
+# Executado em cada servidor de banco. Usuario so leitura com PROCESS e
+# REPLICATION CLIENT, credencial em arquivo 0600 no proprio servidor:
+#   CREATE USER 'flux_monitor'@'localhost' IDENTIFIED BY '...';
+#   GRANT PROCESS, REPLICATION CLIENT ON *.* TO 'flux_monitor'@'localhost';
+MYSQL_CLI_CMD="mysql --defaults-extra-file=/etc/mysql/flux-loadtest.cnf"
+MYSQL_DISK_PATH=/var/lib/mysql
+# Schema do Flux: o sysbench se recusa a usar este nome
+FLUX_DB_NAME=flux
+# VIP do keepalived: o coletor marca em qual no ele esta (coluna db_vip)
+DB_VIP=172.17.4.100
+
+# ------------------------------------------------------------------ MySQL (sysbench, --tests mysql)
+# Roda da VM de teste contra o VIP. Cria o schema isolado abaixo e remove as
+# tabelas sbtest* no fim. No Percona XtraDB Cluster a escrita e replicada de forma
+# sincrona para o outro no (flow control). O VIP 172.17.4.100 so e alcancavel de
+# dentro da rede 172.17.4.0/24: de uma VM externa, --tests mysql nao conecta.
+#   CREATE USER 'flux_bench'@'IP_DA_VM' IDENTIFIED BY '...';
+#   GRANT ALL ON loadtest.* TO 'flux_bench'@'IP_DA_VM';
+# A senha vai na linha de comando do sysbench (visivel no ps da VM de teste).
+MYSQL_BENCH_HOST=172.17.4.100
+MYSQL_BENCH_PORT=3306
+MYSQL_BENCH_USER=flux_bench
+MYSQL_BENCH_PASSWORD_FILE=/etc/flux-loadtest/mysql_bench.pass
+MYSQL_BENCH_DB=loadtest
+MYSQL_BENCH_TABLES=4
+MYSQL_BENCH_TABLE_SIZE=100000
+MYSQL_BENCH_THREADS=8
+# Ex.: --mysql-ssl=on (caching_sha2_password sem TLS pode recusar a conexao)
+MYSQL_BENCH_EXTRA_ARGS=
+
+# ------------------------------------------------------------------ Web
+# Lidas no proprio servidor web (curl local); vazio = nao coleta.
+# nginx:   location = /nginx_status { stub_status; allow 127.0.0.1; deny all; }
+# php-fpm: pm.status_path = /fpm-status  (+ location com allow 127.0.0.1)
+NGINX_STATUS_URL=http://127.0.0.1/nginx_status
+FPM_STATUS_URL=http://127.0.0.1/fpm-status?json
+# Prefixos de processo (comm) somados no servidor web
+WEB_PROCS=nginx,php-fpm
+# Alvos do wrk (a partir da VM de teste)
+WEB_BASE_URL=https://200.159.177.165
+WEB_STATIC_PATH=/assets/images/addon_icon.png
+WEB_PHP_PATH=/
+WEB_EXTRA_PATH=
+# 1 = aceita certificado autoassinado no curl (o wrk nao valida certificado)
+WEB_TLS_INSECURE=1
+# 1 = reutiliza um unico cookie de sessao no teste PHP. O CodeIgniter grava a
+# sessao no MySQL (ci_sessions): sem isso cada request cria uma linha nova.
+WEB_REUSE_SESSION=1
+WEB_SESSION_COOKIE=ci_session
+
+# ------------------------------------------------------------------ limites de seguranca
+# A carga para (de forma suave) quando um limite estoura GUARD_HITS amostras seguidas.
+GUARD_MAX_CPU_PCT=85
+GUARD_MAX_GEN_CPU_PCT=90
+GUARD_MAX_MEM_PCT=90
+GUARD_MIN_DISK_FREE_PCT=15
+GUARD_MAX_FAIL_PCT=5
+# Replicacao assincrona (nao se aplica ao Percona XtraDB Cluster)
+GUARD_MAX_REPL_LAG=30
+# Percona XtraDB Cluster: no fora de Synced ou sem quorum (Primary) sempre interrompem.
+# Fracao maxima do intervalo com replicacao pausada por flow control (%; 0 = desligado)
+GUARD_MAX_WSREP_FC_PCT=10
+# Tamanho minimo do cluster (0 = desligado). STFC: 2 nos.
+GUARD_MIN_WSREP_CLUSTER_SIZE=2
+# Nucleo mais carregado. 0 = desligado: o FS de producao tem uma thread que
+# ocupa ~95% de um nucleo o tempo todo (analise de 2026-10-06), o que dispararia sempre.
+GUARD_MAX_CORE_PCT=0
+GUARD_HITS=3
+
+# ------------------------------------------------------------------ coleta e saida
+SAMPLE_INTERVAL=5
+BASELINE_SECONDS=60
+COOLDOWN_SECONDS=60
+RESULTS_DIR=/var/lib/flux-loadtest/results

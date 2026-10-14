@@ -1,0 +1,31 @@
+# Laboratorio STFC: Percona XtraDB Cluster 8.4 (2 nos), gerado pelo start.sh
+[mysqld]
+server-id=@SERVER_ID@
+bind-address=0.0.0.0
+datadir=/var/lib/mysql
+socket=/var/run/mysqld/mysqld.sock
+pid-file=/var/run/mysqld/mysqld.pid
+log-error=/var/log/mysql/error.log
+innodb_buffer_pool_size=256M
+binlog_format=ROW
+default_storage_engine=InnoDB
+innodb_autoinc_lock_mode=2
+# PHP 7.3 nao autentica em caching_sha2_password (padrao do 8.4): o usuario da
+# aplicacao web usa mysql_native_password, desligado por padrao no 8.4.
+mysql_native_password=ON
+# usuario labcheck (verificacao do laboratorio) autenticado pelo root do sistema
+plugin-load-add=auth_socket.so
+
+wsrep_provider=@WSREP_PROVIDER@
+wsrep_cluster_name=stfc-lab
+wsrep_cluster_address=gcomm://172.30.4.161,172.30.4.164
+wsrep_node_address=@NODE_ADDR@
+wsrep_node_name=@NODE_NAME@
+wsrep_sst_method=xtrabackup-v2
+pxc_strict_mode=ENFORCING
+# Diferenca para producao: sem criptografia do trafego do cluster, porque os
+# certificados gerados em cada container sao diferentes.
+pxc-encrypt-cluster-traffic=OFF
+
+[client]
+socket=/var/run/mysqld/mysqld.sock

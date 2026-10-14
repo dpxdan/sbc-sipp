@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+#
+# fs_cli simulado do laboratorio STFC. Aceita -H/-P/-p/-x como o original e exige
+# a senha do event socket gravada em /etc/flux-lab/fs_cli.pass. Os numeros vem das
+# estatisticas do SIPp que simula o FreeSWITCH neste servidor.
+
+set -uo pipefail
+export LC_ALL=C
+
+pass="" cmd=""
+while (($# > 0)); do
+    case "$1" in
+        -p|--password) pass=${2:-}; shift 2 ;;
+        -x|--execute)  cmd=${2:-}; shift 2 ;;
+        -H|--host|-P|--port) shift 2 ;;
+        *) shift ;;
+    esac
+done
+
+expected=$(head -n 1 /etc/flux-lab/fs_cli.pass 2>/dev/null || true)
+if [[ -z ${pass} ]]; then pass=ClueCon; fi
+if [[ ${pass} != "${expected}" ]]; then
+    echo "Error Connecting [Socket Connection Error]"
+    exit 1
+fi
+
+stats=/run/flux-lab/freeswitch.csv
+cur=0 total=0 rate=0
+if [[ -s ${stats} ]]; then
+    read -r cur total rate < <(awk -F';' 'NR == 1 { for (i = 1; i <= NF; i++) c[$i] = i; next } { l = $0 }
+        END { split(l, v, ";"); printf "%d %d %d\n", v[c["CurrentCall"]], v[c["TotalCallCreated"]], v[c["CallRate(P)"]] + 0.5 }' "${stats}")
+fi
+
+idle_cpu() {
+    local a b
+    a=$(awk '/^cpu /{ print $2 + $3 + $4 + $5 + $6 + $7 + $8, $5 }' /proc/stat)
+    sleep 0.2
+    b=$(awk '/^cpu /{ print $2 + $3 + $4 + $5 + $6 + $7 + $8, $5 }' /proc/stat)
+    awk -v a="${a}" -v b="${b}" 'BEGIN { split(a, x, " "); split(b, y, " "); t = y[1] - x[1]; if (t <= 0) t = 1; printf "%.2f", 100 * (y[2] - x[2]) / t }'
+}
+
+case "${cmd}" in
+    status)
+        up=$(( $(date +%s) - $(cat /run/flux-lab/started 2>/dev/null || date +%s) ))
+        printf 'UP 0 years, 0 days, %d hours, %d minutes, %d seconds\n' $((up / 3600)) $((up % 3600 / 60)) $((up % 60))
+        printf 'FreeSWITCH (Version 1.11.3 lab-simulado 64bit) is ready\n'
+        printf '%d session(s) since startup\n' "${total}"
+        printf '%d session(s) - peak %d, last 5min %d\n' "${cur}" "${cur}" "${cur}"
+        printf '%d session(s) per Sec out of max 50, peak %d, last 5min %d\n' "${rate}" "${rate}" "${rate}"
+        printf '2000 session(s) max\n'
+        printf 'min idle cpu 0.00/%s\n' "$(idle_cpu)"
+        ;;
+    "show calls count")
+        printf '\n%d total.\n\n' "${cur}"
+        ;;
+    "show channels count")
+        printf '\n%d total.\n\n' "${cur}"
+        ;;
+    "sofia status")
+        printf '                     Name\t   Type\t                                      Data\tState\n'
+        printf '=================================================================================================\n'
+        printf '                 external\tprofile\t               sip:mod_sofia@0.0.0.0:5070\tRUNNING (0)\n'
+        printf '=================================================================================================\n'
+        ;;
+    vm_boxcount*)
+        printf '0:0:0:0\n'
+        ;;
+    *)
+        printf -- '-ERR %s Command not found!\n' "${cmd%% *}"
+        ;;
+esac

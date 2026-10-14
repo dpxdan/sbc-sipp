@@ -1,0 +1,96 @@
+# Laboratorio STFC do flux-loadtest (WEB-1437)
+#
+# Replica a topologia de producao com redes do Docker:
+#   stfc_int 172.30.4.0/24    = rede interna 172.17.4.0/24 (172.17/16 e do Docker; 172.18/16 ja usada)
+#   stfc_pub 172.30.177.0/24  = IPs publicos 200.159.177.x (mesmos finais)
+# A vm-teste fica so na rede "publica", como a VM no Parallels: nao alcanca o VIP.
+#
+# Use pelo lab.sh (gera o .env com as senhas e a configuracao do flux-loadtest).
+
+name: flux-stfc-lab
+
+networks:
+  stfc_int:
+    ipam:
+      config:
+        - subnet: 172.30.4.0/24
+  stfc_pub:
+    ipam:
+      config:
+        - subnet: 172.30.177.0/24
+
+services:
+  sbc-stfc-1:
+    build: { context: images, target: sbc }
+    image: flux-stfc-lab/sbc
+    hostname: sbc-stfc-1
+    env_file: .env
+    environment:
+      LAB_SIP_ROLES: "opensips fs"
+      LAB_PUB_IP: 172.30.177.163
+    networks:
+      stfc_int: { ipv4_address: 172.30.4.163 }
+      stfc_pub: { ipv4_address: 172.30.177.163 }
+
+  sbc-stfc-02:
+    build: { context: images, target: sbc }
+    image: flux-stfc-lab/sbc
+    hostname: sbc-stfc-02
+    env_file: .env
+    environment:
+      LAB_SIP_ROLES: "fs"
+      LAB_PUB_IP: 172.30.177.162
+    networks:
+      stfc_int: { ipv4_address: 172.30.4.162 }
+      stfc_pub: { ipv4_address: 172.30.177.162 }
+
+  banco-master-sbc-stfc:
+    build: { context: images, target: db }
+    image: flux-stfc-lab/db
+    hostname: banco-master-sbc-stfc
+    env_file: .env
+    cap_add: [NET_ADMIN, NET_RAW, NET_BROADCAST]
+    environment:
+      LAB_DB_NODE: "1"
+      LAB_DB_ADDR: 172.30.4.161
+      LAB_DB_PEER: 172.30.4.164
+      LAB_VRRP_PRIORITY: "150"
+    networks:
+      stfc_int: { ipv4_address: 172.30.4.161 }
+      stfc_pub: { ipv4_address: 172.30.177.161 }
+
+  banco-slave-stfc:
+    build: { context: images, target: db }
+    image: flux-stfc-lab/db
+    hostname: banco-slave-stfc
+    env_file: .env
+    cap_add: [NET_ADMIN, NET_RAW, NET_BROADCAST]
+    depends_on: [banco-master-sbc-stfc]
+    environment:
+      LAB_DB_NODE: "2"
+      LAB_DB_ADDR: 172.30.4.164
+      LAB_DB_PEER: 172.30.4.161
+      LAB_VRRP_PRIORITY: "100"
+    networks:
+      stfc_int: { ipv4_address: 172.30.4.164 }
+      stfc_pub: { ipv4_address: 172.30.177.164 }
+
+  sbc-stfc-interfaceweb:
+    build: { context: images, target: web }
+    image: flux-stfc-lab/web
+    hostname: sbc-stfc-interfaceweb
+    env_file: .env
+    networks:
+      stfc_int: { ipv4_address: 172.30.4.165 }
+      stfc_pub: { ipv4_address: 172.30.177.165 }
+
+  vm-teste:
+    build: { context: images, target: gen }
+    image: flux-stfc-lab/gen
+    hostname: vm-teste
+    volumes:
+      - ../:/opt/flux-loadtest:ro
+      - ./out:/etc/flux-loadtest
+      - ./out/results:/var/lib/flux-loadtest/results
+    networks:
+      stfc_pub: { ipv4_address: 172.30.177.50 }

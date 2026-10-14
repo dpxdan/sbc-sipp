@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+#
+# opensips-cli simulado do laboratorio STFC (so "-x mi get_statistics" e "lb_list").
+# Os numeros vem das estatisticas do SIPp que simula o OpenSIPS neste servidor.
+
+set -uo pipefail
+export LC_ALL=C
+
+args=("$@")
+mi=""
+for ((i = 0; i < ${#args[@]}; i++)); do
+    if [[ ${args[i]} == mi ]]; then mi=${args[i + 1]:-}; break; fi
+done
+
+stats=/run/flux-lab/opensips.csv
+cur=0 total=0 failed=0
+if [[ -s ${stats} ]]; then
+    read -r cur total failed < <(awk -F';' 'NR == 1 { for (i = 1; i <= NF; i++) c[$i] = i; next } { l = $0 }
+        END { split(l, v, ";"); printf "%d %d %d\n", v[c["CurrentCall"]], v[c["TotalCallCreated"]], v[c["FailedCall(C)"]] }' "${stats}")
+fi
+
+case "${mi}" in
+    get_statistics)
+        printf '{\n'
+        printf '    "dialog:active_dialogs": %d,\n' "${cur}"
+        printf '    "dialog:early_dialogs": 0,\n'
+        printf '    "dialog:failed_dialogs": %d,\n' "${failed}"
+        printf '    "tm:inuse_transactions": %d,\n' $((cur / 10))
+        printf '    "core:rcv_requests": %d,\n' $((total * 3))
+        printf '    "core:drop_requests": 0,\n'
+        printf '    "shmem:total_size": 268435456,\n'
+        printf '    "shmem:real_used_size": %d,\n' $((33554432 + cur * 8192))
+        printf '    "load:load": %d\n' $((cur / 100))
+        printf '}\n'
+        ;;
+    lb_list)
+        printf '{\n    "Destinations": [\n'
+        printf '        {"id": 1, "group": 1, "uri": "sip:172.30.4.163:5070", "enabled": "yes", "auto-re": "on", "Resources": [{"name": "channels", "max": 2000}]},\n'
+        printf '        {"id": 2, "group": 1, "uri": "sip:172.30.4.162:5070", "enabled": "yes", "auto-re": "on", "Resources": [{"name": "channels", "max": 2000}]}\n'
+        printf '    ]\n}\n'
+        ;;
+    *)
+        printf 'ERROR: comando MI nao simulado no laboratorio: %s\n' "${mi}" >&2
+        exit 1
+        ;;
+esac

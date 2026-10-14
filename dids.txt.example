@@ -1,0 +1,27 @@
+# flux-loadtest - lista de DIDs de teste (DID_FILE)
+#
+# Um DID por linha, exatamente como cadastrado em dids.number (so digitos,
+# opcional "+" no inicio, 4 a 20 digitos). Linhas vazias e comentarios (#)
+# sao ignorados. O script embaralha a lista e reaproveita os DIDs em ciclo,
+# entao poucos DIDs ja bastam para validar; use a massa completa (100 mil)
+# nos testes de carga.
+#
+# Cada DID precisa cair na caixa postal: tipo DID-LOCAL (call_type = 0)
+# apontando para um ramal nao registrado com vm-enabled=true, em uma conta de
+# teste sem tarifa (cada chamada gera CDR e passa pelo billing).
+#
+# Os numeros abaixo sao ficticios: substitua pelos DIDs reais da conta de teste.
+#
+# Exportar do banco (somente leitura; troque <ID_CONTA_TESTE>):
+#   mysql -N -B -e "SELECT number FROM dids WHERE accountid = <ID_CONTA_TESTE> AND status = 0 AND call_type = 0" flux > /etc/flux-loadtest/dids.txt
+#
+5500000000001
+5500000000002
+5500000000003
+5500000000004
+5500000000005
+5500000000006
+5500000000007
+5500000000008
+5500000000009
+5500000000010

@@ -1,0 +1,19 @@
+#!/usr/bin/expect -f
+#
+# Laboratorio STFC: "flux-loadtest.sh keys setup" respondendo, em cada servidor, a
+# senha do usuario loadtest (gerada pelo lab.sh em /etc/flux-loadtest/loadtest.pass).
+# So para o laboratorio: em producao a senha e digitada pelo operador.
+
+set timeout 60
+set fh [open /etc/flux-loadtest/loadtest.pass r]
+set pw [string trim [read $fh]]
+close $fh
+
+spawn /opt/flux-loadtest/flux-loadtest.sh keys setup -c /etc/flux-loadtest/loadtest.conf -y
+expect {
+    -re {password: ?$} { send -- "$pw\r"; exp_continue }
+    timeout { puts "\n\[lab\] tempo esgotado esperando o keys setup"; exit 1 }
+    eof
+}
+lassign [wait] pid spawnid os_error rc
+exit $rc
