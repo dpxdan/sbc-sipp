@@ -54,8 +54,8 @@ SIP_TARGET=200.159.177.163:5060
 # (FLUX_GRP_CARRIERS = 10), seguido de: opensips-cli -x mi address_reload
 SIP_LOCAL_IP=
 SIP_LOCAL_PORT=5060
-# Um DID por linha (so digitos, opcional +). DIDs que caem na caixa postal.
-# Modelo: dids.txt.example (aceita comentarios # e linhas vazias)
+# Um DID por linha (so digitos, opcional +). Com UAS_PORT: DIDs DIRECT-IP apontando
+# para esta VM (ver abaixo). Modelo: dids.txt.example (aceita comentarios # e linhas vazias)
 DID_FILE=/etc/flux-loadtest/dids.txt
 # Numero de A das chamadas de teste (facilita filtrar CDRs depois)
 CALLER_ID=551130009999
@@ -63,6 +63,14 @@ CALLER_ID=551130009999
 RTP_PORT_BASE=20000
 # Tempo maximo esperando o 200 OK do INVITE (ms); depois a chamada conta como falha
 SIP_RECV_TIMEOUT_MS=60000
+# Atendedor (segundo SIPp, UAS) nesta VM. Os DIDs do teste ficam como DIRECT-IP
+# (dids.call_type = 2) com extensions=<IP desta VM visto pelos FS>:UAS_PORT; o FS faz
+# bridge para ca e a chamada percorre OpenSIPS, load_balancer, dialplan Lua, MySQL e a
+# midia dos dois lados. Liberar no firewall da VM: UAS_PORT/udp e a faixa de RTP a
+# partir de UAS_RTP_PORT_BASE vindos dos FS. Vazio = sem atendedor (o DID precisa ser
+# atendido no FS, ex.: caixa postal).
+UAS_PORT=5090
+UAS_RTP_PORT_BASE=40000
 
 # ------------------------------------------------------------------ FreeSWITCH
 # Executado no servidor FS pelo usuario SSH
@@ -162,3 +170,18 @@ SAMPLE_INTERVAL=5
 BASELINE_SECONDS=60
 COOLDOWN_SECONDS=60
 RESULTS_DIR=/var/lib/flux-loadtest/results
+
+# ------------------------------------------------------------------ Zabbix (opcional)
+# Vazio = sem Zabbix. Com ZABBIX_SERVER, o run envia as amostras por trapper (porta
+# 10051, sem criptografia: use so em rede interna) e "zabbix send" importa execucoes antigas.
+# Templates: zabbix/flux-loadtest-templates.yaml. Hosts: <prefixo><id> (flt-fs1, flt-run...).
+ZABBIX_SERVER=
+ZABBIX_PORT=10051
+ZABBIX_HOST_PREFIX=flt-
+# 1 = envia durante o run; 0 = so pela importacao depois do teste
+ZABBIX_LIVE=1
+# API, usada so por "zabbix setup" e "zabbix check" (ex.: https://zabbix.exemplo/api_jsonrpc.php)
+ZABBIX_API_URL=
+# Token de API num arquivo 0600 (Users > API tokens). Permissao de escrita em hosts.
+ZABBIX_API_TOKEN_FILE=
+ZABBIX_TLS_INSECURE=0

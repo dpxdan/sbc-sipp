@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="ISO-8859-1" ?>
+<!DOCTYPE scenario SYSTEM "sipp.dtd">
+
+<!--
+  WEB-1437 - atendedor (UAS) dos DIDs DIRECT-IP, na propria VM de teste.
+
+  Caminho: SIPp UAC -> OpenSIPS -> load_balancer -> FreeSWITCH (dialplan Lua, consulta
+  do DID no MySQL) -> bridge sofia/<perfil>/<DID>@<extensions> -> este UAS.
+  O DID precisa estar como DIRECT-IP (dids.call_type = 2) com extensions = IP:porta
+  em que o FS alcanca esta VM (UAS_PORT).
+
+  Modelo processado pelo flux-loadtest.sh. Nao usar direto no sipp:
+    @MEDIA_PORT@      [rtpstream_audio_port] (midia rtp) ou [media_port] (midia none)
+    @RTP_ACTION@      inicia o rtp_stream (midia rtp) ou vazio
+    @BYE_TIMEOUT_MS@  espera maxima pelo BYE (hold + margem); depois conta como falha
+
+  O BYE normalmente vem do FS quando o UAC encerra (fim do hold). Nao ha [field]: o
+  DID chamado e o numero de A chegam no INVITE.
+-->
+<scenario name="WEB-1437 UAS DIRECT-IP">
+
+  <recv request="INVITE" crlf="true"/>
+
+  <send>
+    <![CDATA[
+
+      SIP/2.0 100 Trying
+      [last_Via:]
+      [last_From:]
+      [last_To:]
+      [last_Call-ID:]
+      [last_CSeq:]
+      Content-Length: 0
+
+    ]]>
+  </send>
+
+  <send>
+    <![CDATA[
+
+      SIP/2.0 180 Ringing
+      [last_Via:]
+      [last_From:]
+      [last_To:];tag=[pid]UAS[call_number]
+      [last_Call-ID:]
+      [last_CSeq:]
+      Contact: <sip:[service]@[local_ip]:[local_port];transport=[transport]>
+      Content-Length: 0
+
+    ]]>
+  </send>
+
+  <send retrans="500">
+    <![CDATA[
+
+      SIP/2.0 200 OK
+      [last_Via:]
+      [last_From:]
+      [last_To:];tag=[pid]UAS[call_number]
+      [last_Call-ID:]
+      [last_CSeq:]
+      Contact: <sip:[service]@[local_ip]:[local_port];transport=[transport]>
+      Allow: INVITE, ACK, BYE, CANCEL, OPTIONS
+      User-Agent: flux-loadtest-uas
+      Content-Type: application/sdp
+      Content-Length: [len]
+
+      v=0
+      o=loadtest-uas 53655765 2353687637 IN IP[local_ip_type] [local_ip]
+      s=flux-loadtest-uas
+      c=IN IP[media_ip_type] [media_ip]
+      t=0 0
+      m=audio @MEDIA_PORT@ RTP/AVP 8 101
+      a=rtpmap:8 PCMA/8000
+      a=rtpmap:101 telephone-event/8000
+      a=fmtp:101 0-15
+      a=ptime:20
+      a=sendrecv
+
+    ]]>
+  </send>
+
+  <recv request="ACK" crlf="true"/>
+
+  @RTP_ACTION@
+
+  <recv request="BYE" timeout="@BYE_TIMEOUT_MS@"/>
+
+  <send>
+    <![CDATA[
+
+      SIP/2.0 200 OK
+      [last_Via:]
+      [last_From:]
+      [last_To:]
+      [last_Call-ID:]
+      [last_CSeq:]
+      Contact: <sip:[service]@[local_ip]:[local_port];transport=[transport]>
+      Content-Length: 0
+
+    ]]>
+  </send>
+
+  <!-- absorve retransmissoes do BYE -->
+  <timewait milliseconds="2000"/>
+
+  <CallLengthRepartition value="1000, 5000, 10000, 30000, 60000, 120000"/>
+
+</scenario>

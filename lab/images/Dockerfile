@@ -33,6 +33,61 @@ RUN install -m 0755 /opt/flux-lab/sbc/fs_cli /usr/bin/fs_cli \
     && printf 'loadtest ALL=(root) NOPASSWD: /usr/bin/fs_cli, /usr/bin/opensips-cli\n' > /etc/sudoers.d/flux-loadtest \
     && chmod 0440 /etc/sudoers.d/flux-loadtest
 
+# ------------------------------------------------------------------ sbc-real (FreeSWITCH + OpenSIPS reais, stack Flux)
+# FreeSWITCH 1.11.3 (pacotes SignalWire, como o flux_install.sh), OpenSIPS 3.6, PHP-FPM 7.3 +
+# nginx em 127.0.0.1:8735 (xml_curl do Flux) e ODBC para o dialplan Lua. Os scripts do Flux
+# vem do clone do repositorio sbc montado em /opt/flux-src (LAB_FLUX_SRC no .env).
+# O token da SignalWire entra so como secret do BuildKit: o auth.conf e criado e apagado no
+# mesmo RUN, entao nenhuma camada guarda o token. Build: lab.sh up (LAB_SIGNALWIRE_TOKEN_FILE).
+FROM base AS sbc-real
+ENV LAB_ROLE=sbc-real
+ARG OPENSIPS_SERIES=3.6
+RUN --mount=type=secret,id=signalwire_token,required=true \
+    set -eu \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gnupg wget lsb-release \
+    && token=$(head -n 1 /run/secrets/signalwire_token | tr -d '[:space:]') \
+    && [ -n "${token}" ] \
+    && install -m 0600 /dev/null /etc/apt/auth.conf.d/signalwire.conf \
+    && printf 'machine freeswitch.signalwire.com login signalwire password %s\n' "${token}" \
+        > /etc/apt/auth.conf.d/signalwire.conf \
+    && wget -q --http-user=signalwire --http-password="${token}" \
+        -O /usr/share/keyrings/signalwire-freeswitch-repo.gpg \
+        https://freeswitch.signalwire.com/repo/deb/debian-release/signalwire-freeswitch-repo.gpg \
+    && unset token \
+    && echo "deb [signed-by=/usr/share/keyrings/signalwire-freeswitch-repo.gpg] https://freeswitch.signalwire.com/repo/deb/debian-release/ bookworm main" \
+        > /etc/apt/sources.list.d/freeswitch.list \
+    && curl -fsSLo /usr/share/keyrings/opensips-org.gpg https://apt.opensips.org/opensips-org.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/opensips-org.gpg] https://apt.opensips.org bookworm ${OPENSIPS_SERIES}-releases" \
+        > /etc/apt/sources.list.d/opensips.list \
+    && curl -fsSLo /tmp/debsuryorg-archive-keyring.deb https://packages.sury.org/debsuryorg-archive-keyring.deb \
+    && apt-get install -y /tmp/debsuryorg-archive-keyring.deb \
+    && rm -f /tmp/debsuryorg-archive-keyring.deb \
+    && echo "deb [signed-by=/usr/share/keyrings/deb.sury.org-php.gpg] https://packages.sury.org/php/ bookworm main" \
+        > /etc/apt/sources.list.d/sury-php.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        freeswitch freeswitch-conf-vanilla freeswitch-mod-console freeswitch-mod-logfile \
+        freeswitch-mod-xml-curl freeswitch-mod-json-cdr freeswitch-mod-hash freeswitch-mod-event-socket \
+        freeswitch-mod-sofia freeswitch-mod-commands freeswitch-mod-dptools freeswitch-mod-voicemail \
+        freeswitch-mod-db freeswitch-mod-dialplan-xml freeswitch-mod-g723-1 freeswitch-mod-sndfile \
+        freeswitch-mod-native-file freeswitch-mod-local-stream freeswitch-mod-tone-stream \
+        freeswitch-mod-lua freeswitch-mod-say-en freeswitch-sounds-en-us-callie \
+        freeswitch-music-default \
+        opensips opensips-mysql-module opensips-mysql-dbschema opensips-http-modules opensips-cli \
+        nginx php7.3-fpm php7.3-mysql php7.3-cli php7.3-curl php7.3-xml php7.3-mbstring \
+        unixodbc odbc-mariadb default-mysql-client sngrep netcat-openbsd \
+    && rm -f /etc/apt/auth.conf.d/signalwire.conf /etc/apt/sources.list.d/freeswitch.list \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -f /etc/nginx/sites-enabled/default \
+    && mkdir -p /var/lib/flux /var/log/flux /run/opensips /var/lib/freeswitch \
+    && rm -rf /etc/freeswitch \
+    && cp -a /usr/share/freeswitch/conf/vanilla /etc/freeswitch
+COPY sbc-real/ /opt/flux-lab/sbc-real/
+RUN chmod 0755 /opt/flux-lab/sbc-real/start.sh \
+    && printf 'loadtest ALL=(root) NOPASSWD: /usr/bin/fs_cli, /usr/bin/opensips-cli\n' > /etc/sudoers.d/flux-loadtest \
+    && chmod 0440 /etc/sudoers.d/flux-loadtest
+
 # ------------------------------------------------------------------ db (Percona XtraDB Cluster 8.4.10 + keepalived)
 FROM base AS db
 ENV LAB_ROLE=db

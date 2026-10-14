@@ -3,7 +3,9 @@
 
 <!--
   WEB-1437 - INVITE para DID via OpenSIPS (operadora) -> load_balancer -> FreeSWITCH.
-  Destino esperado: DID que cai na caixa postal (answer + voicemail no FS).
+  Destino esperado: DID DIRECT-IP (call_type 2) que o FS entrega ao atendedor SIPp
+  desta VM (scenarios/uas-answer.xml.in, UAS_PORT). Sem atendedor, o DID precisa ser
+  atendido no proprio FS (ex.: caixa postal).
 
   Modelo processado pelo flux-loadtest.sh. Nao usar direto no sipp:
     @HOLD_MS@     tempo da chamada atendida antes do BYE (ms)
@@ -78,7 +80,7 @@
 
   @RTP_ACTION@
 
-  <!-- Espera o hold; se o FS encerrar antes (fim da caixa postal), responde o BYE. -->
+  <!-- Espera o hold; se o FS encerrar antes (queda do outro lado), responde o BYE. -->
   <recv request="BYE" timeout="@HOLD_MS@" ontimeout="local_bye"/>
 
   <nop>

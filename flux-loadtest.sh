@@ -7,7 +7,8 @@
 #
 # Fases de um "run" (cada uma marcada no tempo para o relatorio):
 #   baseline  so coleta, com o trafego real do ambiente
-#   sip       SIPp envia INVITE para DIDs (caixa postal) via OpenSIPS
+#   sip       SIPp envia INVITE para DIDs via OpenSIPS; com UAS_PORT, um segundo SIPp
+#             nesta VM atende o bridge do FS (DIDs DIRECT-IP, call_type 2)
 #   mysql     sysbench em schema isolado (opcional, --tests ...,mysql)
 #   web_*     wrk no nginx (estatico) e no PHP-FPM (pagina PHP)
 #   cooldown  so coleta, para ver o retorno ao normal
@@ -19,6 +20,10 @@
 # Limites de seguranca (guard): se CPU, memoria, disco, atraso de replicacao
 # ou taxa de falha SIP passarem do limite por GUARD_HITS amostras seguidas,
 # a carga para de forma suave e as fases seguintes sao canceladas.
+#
+# Zabbix (opcional, ZABBIX_SERVER): as amostras vao por trapper durante o run
+# (lib/flux_zabbix.py) e uma execucao antiga pode ser importada com "zabbix send".
+# Templates em zabbix/flux-loadtest-templates.yaml.
 #
 # Requisitos na VM de teste (Debian 12):
 #   apt install sip-tester wrk openssh-client curl python3
@@ -32,6 +37,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 readonly COLLECTOR="${SCRIPT_DIR}/lib/collector.sh"
 readonly SCENARIO_TPL="${SCRIPT_DIR}/scenarios/uac-did.xml.in"
+readonly UAS_TPL="${SCRIPT_DIR}/scenarios/uas-answer.xml.in"
+# porta de controle do SIPp atendedor (o originador usa a padrao, 8888)
+readonly UAS_CONTROL_PORT=8889
+readonly ZBX_HELPER="${SCRIPT_DIR}/lib/flux_zabbix.py"
+readonly ZBX_TEMPLATE="${SCRIPT_DIR}/zabbix/flux-loadtest-templates.yaml"
 readonly UA="flux-loadtest/${VERSION}"
 
 # Codigos de saida
@@ -51,6 +61,7 @@ declare -A CFG=(
     [OPENSIPS_HOST]="" [FS_HOSTS]="" [DB_HOSTS]="" [WEB_HOST]=""
     [SIP_TARGET]="" [SIP_LOCAL_IP]="" [SIP_LOCAL_PORT]="5060"
     [DID_FILE]="" [CALLER_ID]="" [RTP_PORT_BASE]="20000" [SIP_RECV_TIMEOUT_MS]="60000"
+    [UAS_PORT]="" [UAS_RTP_PORT_BASE]="40000"
     [FS_CLI_CMD]="fs_cli -x" [FS_CLI_PASSWORD_FILE]="" [FS_DISK_PATH]="/var/lib/freeswitch"
     [VM_BOXES]="" [VM_GREETING_SECONDS]="8" [VM_BYTES_PER_SECOND]="16000"
     [OPENSIPS_MI_CMD]="opensips-cli -x mi"
@@ -67,6 +78,8 @@ declare -A CFG=(
     [GUARD_MAX_WSREP_FC_PCT]="10" [GUARD_MIN_WSREP_CLUSTER_SIZE]="0"
     [SAMPLE_INTERVAL]="5" [BASELINE_SECONDS]="60" [COOLDOWN_SECONDS]="60"
     [RESULTS_DIR]="/var/lib/flux-loadtest/results"
+    [ZABBIX_SERVER]="" [ZABBIX_PORT]="10051" [ZABBIX_HOST_PREFIX]="flt-" [ZABBIX_LIVE]="1"
+    [ZABBIX_API_URL]="" [ZABBIX_API_TOKEN_FILE]="" [ZABBIX_TLS_INSECURE]="0"
 )
 
 load_config() {
@@ -103,9 +116,18 @@ validate_config() {
                MYSQL_BENCH_THREADS GUARD_MAX_CPU_PCT GUARD_MAX_GEN_CPU_PCT GUARD_MAX_MEM_PCT \
                GUARD_MIN_DISK_FREE_PCT GUARD_MAX_FAIL_PCT GUARD_MAX_REPL_LAG GUARD_MAX_CORE_PCT \
                GUARD_HITS GUARD_MAX_WSREP_FC_PCT GUARD_MIN_WSREP_CLUSTER_SIZE \
-               SAMPLE_INTERVAL BASELINE_SECONDS COOLDOWN_SECONDS; do
+               SAMPLE_INTERVAL BASELINE_SECONDS COOLDOWN_SECONDS ZABBIX_PORT UAS_RTP_PORT_BASE; do
         is_uint "${CFG[${key}]}" || die "${E_CONFIG}" "${key} deve ser inteiro: '${CFG[${key}]}'"
     done
+    if [[ -n ${CFG[UAS_PORT]} ]]; then
+        is_uint "${CFG[UAS_PORT]}" && ((CFG[UAS_PORT] >= 1 && CFG[UAS_PORT] <= 65535)) \
+            || die "${E_CONFIG}" "UAS_PORT invalida: '${CFG[UAS_PORT]}'"
+        ((CFG[UAS_PORT] != CFG[SIP_LOCAL_PORT])) || die "${E_CONFIG}" "UAS_PORT deve ser diferente de SIP_LOCAL_PORT"
+        ((CFG[UAS_RTP_PORT_BASE] >= 1024 && CFG[UAS_RTP_PORT_BASE] <= 60000)) \
+            || die "${E_CONFIG}" "UAS_RTP_PORT_BASE fora de 1024-60000"
+        ((CFG[UAS_RTP_PORT_BASE] != CFG[RTP_PORT_BASE])) \
+            || die "${E_CONFIG}" "UAS_RTP_PORT_BASE deve ser diferente de RTP_PORT_BASE"
+    fi
     ((CFG[SAMPLE_INTERVAL] >= 1)) || die "${E_CONFIG}" "SAMPLE_INTERVAL minimo: 1"
     [[ ${CFG[SSH_KEY_TYPE]} == ed25519 || ${CFG[SSH_KEY_TYPE]} == rsa ]] \
         || die "${E_CONFIG}" "SSH_KEY_TYPE deve ser ed25519 ou rsa"
@@ -117,6 +139,16 @@ validate_config() {
         || die "${E_CONFIG}" "SSH_KEY_FROM invalido (IPs/CIDR separados por virgula)"
     ((CFG[GUARD_HITS] >= 1)) || die "${E_CONFIG}" "GUARD_HITS minimo: 1"
     [[ ${CFG[RESULTS_DIR]} == /* ]] || die "${E_CONFIG}" "RESULTS_DIR deve ser caminho absoluto"
+    [[ -z ${CFG[ZABBIX_SERVER]} || ${CFG[ZABBIX_SERVER]} =~ ^[A-Za-z0-9._:-]+$ ]] \
+        || die "${E_CONFIG}" "ZABBIX_SERVER invalido: ${CFG[ZABBIX_SERVER]}"
+    [[ ${CFG[ZABBIX_HOST_PREFIX]} =~ ^[A-Za-z0-9._-]{0,32}$ ]] \
+        || die "${E_CONFIG}" "ZABBIX_HOST_PREFIX invalido (letras, numeros, . _ -)"
+    [[ ${CFG[ZABBIX_LIVE]} == [01] && ${CFG[ZABBIX_TLS_INSECURE]} == [01] ]] \
+        || die "${E_CONFIG}" "ZABBIX_LIVE e ZABBIX_TLS_INSECURE devem ser 0 ou 1"
+    [[ -z ${CFG[ZABBIX_API_URL]} || ${CFG[ZABBIX_API_URL]} =~ ^https?://[^[:space:]]+$ ]] \
+        || die "${E_CONFIG}" "ZABBIX_API_URL invalida: ${CFG[ZABBIX_API_URL]}"
+    [[ -z ${CFG[ZABBIX_API_TOKEN_FILE]} || ${CFG[ZABBIX_API_TOKEN_FILE]} == /* ]] \
+        || die "${E_CONFIG}" "ZABBIX_API_TOKEN_FILE deve ser caminho absoluto"
 }
 
 # --------------------------------------------------------------- servidores
@@ -337,20 +369,97 @@ with open(sys.argv[1], "wb") as f:
 PY
 }
 
+# render_scenario MODELO SAIDA TEMPO_MS MIDIA [ARQUIVO_RTP]
+# TEMPO_MS: hold do originador (@HOLD_MS@) ou espera do BYE no atendedor (@BYE_TIMEOUT_MS@)
 render_scenario() {
-    local out=$1 hold_ms=$2 media=$3 rtp_file=${4:-} media_port action=""
-    [[ -r ${SCENARIO_TPL} ]] || die "${E_DEPS}" "cenario nao encontrado: ${SCENARIO_TPL}"
+    local tpl=$1 out=$2 time_ms=$3 media=$4 rtp_file=${5:-} media_port action=""
+    [[ -r ${tpl} ]] || die "${E_DEPS}" "cenario nao encontrado: ${tpl}"
     if [[ ${media} == rtp ]]; then
         media_port='[rtpstream_audio_port]'
         action="<nop><action><exec rtp_stream=\"${rtp_file},-1,8\"/></action></nop>"
     else
         media_port='[media_port]'
     fi
-    sed -e "s|@HOLD_MS@|${hold_ms}|g" \
+    sed -e "s|@HOLD_MS@|${time_ms}|g" \
+        -e "s|@BYE_TIMEOUT_MS@|${time_ms}|g" \
         -e "s|@MEDIA_PORT@|${media_port}|g" \
         -e "s|@RUN_ID@|${RUN_ID}|g" \
         -e "s|@RTP_ACTION@|${action}|g" \
-        "${SCENARIO_TPL}" > "${out}"
+        "${tpl}" > "${out}"
+}
+
+# --------------------------------------------------------------- atendedor (UAS)
+# Com UAS_PORT definido, um segundo SIPp nesta VM atende as chamadas que o FS entrega
+# aos DIDs DIRECT-IP (dids.call_type = 2, extensions = IP desta VM:UAS_PORT). Assim a
+# chamada percorre OpenSIPS, load_balancer, dialplan Lua, MySQL e o bridge com midia
+# nos dois sentidos, sem depender de ramal registrado nem de caixa postal.
+UAS_PID=""
+UAS_ARGS=()
+
+uas_enabled() { [[ -n ${CFG[UAS_PORT]} ]]; }
+
+# Porta UDP do atendedor livre nesta VM (ss do iproute2)
+uas_port_free() {
+    [[ -z $(ss -Hlun "sport = :${CFG[UAS_PORT]}" 2>/dev/null) ]]
+}
+
+# -aa responde 200 a INFO/NOTIFY/OPTIONS/UPDATE fora do cenario; -timeout e so trava de
+# seguranca (o atendedor e encerrado pelo stop_uas ao fim da fase sip)
+uas_args() {
+    local dir=$1 local_ip=$2
+    UAS_ARGS=(-sf "${dir}/uas.xml" -i "${local_ip}" -p "${CFG[UAS_PORT]}" -t u1 -nostdin -aa
+        -cp "${UAS_CONTROL_PORT}" -mp "${CFG[UAS_RTP_PORT_BASE]}" -buff_size 4194304
+        -timeout $((OPT_WINDOW + OPT_HOLD + 300))
+        -trace_stat -stf "${dir}/stats.csv" -fd "${CFG[SAMPLE_INTERVAL]}"
+        -trace_err -error_file "${dir}/errors.log")
+}
+
+prepare_uas() {
+    local dir=$1 local_ip=$2 rtp_file=$3
+    uas_enabled || return 0
+    mkdir -p "${dir}"
+    # o BYE chega ao fim do hold; a margem cobre a rampa de encerramento e o leg_timeout
+    render_scenario "${UAS_TPL}" "${dir}/uas.xml" $(((OPT_HOLD + 120) * 1000)) "${OPT_MEDIA}" "${rtp_file}"
+    uas_args "${dir}" "${local_ip}"
+}
+
+start_uas() {
+    local dir=$1 i
+    uas_enabled || return 0
+    (cd "${dir}" && exec sipp "${UAS_ARGS[@]}" > /dev/null 2> "${dir}/sipp.stderr") &
+    UAS_PID=$!
+    # espera o bind da porta; se o SIPp sair, a causa fica no stderr
+    for ((i = 0; i < 10; i++)); do
+        kill -0 "${UAS_PID}" 2>/dev/null || break
+        uas_port_free || break
+        sleep 0.5 || true
+    done
+    if ! kill -0 "${UAS_PID}" 2>/dev/null; then
+        UAS_PID=""
+        die "${E_DEPS}" "atendedor SIPp nao subiu em ${CFG[UAS_PORT]}/udp: $(sip_real_errors "${dir}/sipp.stderr" | head -c 300)"
+    fi
+    log "atendedor SIPp (UAS) ativo em ${LOCAL_IP}:${CFG[UAS_PORT]} (pid ${UAS_PID}, midia ${OPT_MEDIA})"
+}
+
+# Saida suave (SIGUSR1, uma vez): sem chamadas abertas o SIPp grava as estatisticas
+# finais e sai. As chamadas do atendedor terminam com o BYE que o FS repassa.
+stop_uas() {
+    local i
+    [[ -n ${UAS_PID} ]] || return 0
+    if kill -0 "${UAS_PID}" 2>/dev/null; then
+        kill -USR1 "${UAS_PID}" 2>/dev/null || true
+        for ((i = 0; i < 30; i++)); do
+            kill -0 "${UAS_PID}" 2>/dev/null || break
+            sleep 0.5 || true
+        done
+        if kill -0 "${UAS_PID}" 2>/dev/null; then
+            warn "atendedor SIPp nao encerrou em 15 s; enviando SIGTERM"
+            kill -TERM "${UAS_PID}" 2>/dev/null || true
+        fi
+    fi
+    wait "${UAS_PID}" 2>/dev/null || true
+    UAS_PID=""
+    log "atendedor SIPp encerrado"
 }
 
 # --------------------------------------------------------------- execucao
@@ -365,6 +474,7 @@ REPORT_DONE=0
 SIPP_PID=""
 SIPP_SOFT_SENT=0
 LOAD_PID=""
+ZBX_PID=""
 declare -A COLLECTOR_PID=()
 declare -A GUARD_COUNT=()
 declare -A STALE_WARNED=()
@@ -374,6 +484,8 @@ now() { printf '%(%s)T' -1; }
 phase_begin() {
     PHASE_NAME=$1
     PHASE_START=$(now)
+    # inicio das fases para o envio ao vivo (phases.tsv so recebe a fase concluida)
+    printf '%s\t%s\n' "${PHASE_NAME}" "${PHASE_START}" >> "${RUN_DIR}/phases-start.tsv"
     log "fase ${PHASE_NAME}: inicio"
 }
 
@@ -540,6 +652,7 @@ on_interrupt() {
     if ((INTERRUPTED)); then
         warn "segunda interrupcao: encerrando a carga imediatamente"
         [[ -n ${SIPP_PID} ]] && kill -TERM "${SIPP_PID}" 2>/dev/null
+        [[ -n ${UAS_PID} ]] && kill -TERM "${UAS_PID}" 2>/dev/null
         [[ -n ${LOAD_PID} ]] && kill -TERM "${LOAD_PID}" 2>/dev/null
         exit "${E_ABORT}"
     fi
@@ -555,6 +668,9 @@ on_exit() {
     if [[ -n ${SIPP_PID} ]] && kill -0 "${SIPP_PID}" 2>/dev/null; then
         kill -TERM "${SIPP_PID}" 2>/dev/null || true
     fi
+    if [[ -n ${UAS_PID} ]] && kill -0 "${UAS_PID}" 2>/dev/null; then
+        kill -TERM "${UAS_PID}" 2>/dev/null || true
+    fi
     if [[ -n ${LOAD_PID} ]] && kill -0 "${LOAD_PID}" 2>/dev/null; then
         kill -TERM "${LOAD_PID}" 2>/dev/null || true
     fi
@@ -565,6 +681,7 @@ on_exit() {
     if [[ -n ${RUN_DIR} && -d ${RUN_DIR} ]] && ((REPORT_DONE == 0)); then
         generate_report "${RUN_DIR}" || warn "falha ao gerar o relatorio parcial"
     fi
+    zabbix_live_stop
     exit "${rc}"
 }
 
@@ -606,6 +723,118 @@ snapshot() {
     log "snapshots ${tag} salvos"
 }
 
+# --------------------------------------------------------------- Zabbix
+zbx_enabled() { [[ -n ${CFG[ZABBIX_SERVER]} ]]; }
+
+zbx_trap_args() {
+    ZBX_ARGS=(--server "${CFG[ZABBIX_SERVER]}" --port "${CFG[ZABBIX_PORT]}" --prefix "${CFG[ZABBIX_HOST_PREFIX]}")
+}
+
+zbx_api_args() {
+    require_cfg ZABBIX_API_URL ZABBIX_API_TOKEN_FILE
+    ZBX_ARGS=(--api-url "${CFG[ZABBIX_API_URL]}" --token-file "${CFG[ZABBIX_API_TOKEN_FILE]}")
+    [[ ${CFG[ZABBIX_TLS_INSECURE]} == 1 ]] && ZBX_ARGS+=(--insecure)
+    return 0
+}
+
+# Envio ao vivo: o helper acompanha o RUN_DIR e encerra com SIGTERM (ou se este
+# processo morrer). Falha no Zabbix nao interrompe o teste: so vai para zabbix.log.
+zabbix_live_start() {
+    zbx_enabled && [[ ${CFG[ZABBIX_LIVE]} == 1 ]] || return 0
+    zbx_trap_args
+    python3 "${ZBX_HELPER}" send "${RUN_DIR}" --follow --pid "$$" "${ZBX_ARGS[@]}" \
+        >> "${RUN_DIR}/zabbix.log" 2>&1 &
+    ZBX_PID=$!
+    log "envio ao vivo para o Zabbix ${CFG[ZABBIX_SERVER]}:${CFG[ZABBIX_PORT]} (pid ${ZBX_PID}, log zabbix.log)"
+}
+
+zabbix_live_stop() {
+    [[ -n ${ZBX_PID} ]] || return 0
+    local pid=${ZBX_PID} i
+    ZBX_PID=""
+    kill -TERM "${pid}" 2>/dev/null || true
+    for ((i = 0; i < 60; i++)); do
+        kill -0 "${pid}" 2>/dev/null || break
+        sleep 1
+    done
+    if kill -0 "${pid}" 2>/dev/null; then
+        kill -KILL "${pid}" 2>/dev/null || true
+        warn "envio ao Zabbix nao terminou em 60 s; reenvie com: $0 zabbix send ${RUN_DIR} --force"
+    fi
+    wait "${pid}" 2>/dev/null || warn "envio ao Zabbix com falhas: $(tail -n 1 "${RUN_DIR}/zabbix.log" 2>/dev/null)"
+    log "zabbix: $(grep -o 'enviados .*' "${RUN_DIR}/zabbix.log" 2>/dev/null | tail -n 1)"
+}
+
+usage_zabbix() {
+    cat <<EOF
+Uso: $0 zabbix <sub> [opcoes] [-c ARQUIVO]
+
+  setup [--import-template]  cria o grupo "Flux Loadtest" e os hosts <ZABBIX_HOST_PREFIX><id>
+                             (servidores da configuracao + gen + run) e vincula os templates.
+                             --import-template importa antes ${ZBX_TEMPLATE#"${SCRIPT_DIR}/"}
+  send <diretorio> [--force] [--dry-run]
+                             importa uma execucao com os timestamps originais (--force reenvia
+                             uma execucao ja enviada; --dry-run so mostra os valores)
+  check                      testa a API (ZABBIX_API_URL) e o trapper (ZABBIX_SERVER)
+EOF
+}
+
+cmd_zabbix() {
+    local sub=${1:-} opt import=0 force=0 dry=0 dir="" id
+    (($# > 0)) && shift
+    check_local_deps python3
+    case "${sub}" in
+        setup)
+            for opt in "$@"; do
+                case "${opt}" in
+                    --import-template) import=1 ;;
+                    *) usage_zabbix >&2; die "${E_USAGE}" "opcao invalida para zabbix setup: ${opt}" ;;
+                esac
+            done
+            build_hosts
+            zbx_api_args
+            ZBX_ARGS+=(--prefix "${CFG[ZABBIX_HOST_PREFIX]}" --gen-cpu-max "${CFG[GUARD_MAX_GEN_CPU_PCT]}")
+            ((import)) && ZBX_ARGS+=(--template "${ZBX_TEMPLATE}")
+            for id in "${HOST_IDS[@]}"; do
+                ZBX_ARGS+=(--host "${id}:${HOST_ROLE[${id}]}:${HOST_ADDR[${id}]}")
+            done
+            ZBX_ARGS+=(--host "gen:gen::vm-teste")
+            python3 "${ZBX_HELPER}" setup "${ZBX_ARGS[@]}"
+            ;;
+        send)
+            for opt in "$@"; do
+                case "${opt}" in
+                    --force) force=1 ;;
+                    --dry-run) dry=1 ;;
+                    -*) usage_zabbix >&2; die "${E_USAGE}" "opcao invalida para zabbix send: ${opt}" ;;
+                    *) [[ -z ${dir} ]] || die "${E_USAGE}" "informe um unico diretorio"; dir=${opt%/} ;;
+                esac
+            done
+            [[ -n ${dir} ]] || { usage_zabbix >&2; die "${E_USAGE}" "informe o diretorio da execucao"; }
+            [[ -d ${dir} ]] || die "${E_USAGE}" "diretorio de resultado inexistente: ${dir}"
+            ((dry)) || zbx_enabled || die "${E_CONFIG}" "ZABBIX_SERVER nao definido"
+            zbx_trap_args
+            ((force)) && ZBX_ARGS+=(--force)
+            ((dry)) && ZBX_ARGS+=(--dry-run)
+            python3 "${ZBX_HELPER}" send "${dir}" "${ZBX_ARGS[@]}"
+            ;;
+        check)
+            local -a args=()
+            if [[ -n ${CFG[ZABBIX_API_URL]} ]]; then
+                args+=(--api-url "${CFG[ZABBIX_API_URL]}")
+                [[ -n ${CFG[ZABBIX_API_TOKEN_FILE]} ]] && args+=(--token-file "${CFG[ZABBIX_API_TOKEN_FILE]}")
+                [[ ${CFG[ZABBIX_TLS_INSECURE]} == 1 ]] && args+=(--insecure)
+            fi
+            zbx_trap_args
+            zbx_enabled || ZBX_ARGS=(--prefix "${CFG[ZABBIX_HOST_PREFIX]}")
+            ((${#args[@]} > 0)) || zbx_enabled || die "${E_CONFIG}" "defina ZABBIX_SERVER e/ou ZABBIX_API_URL"
+            python3 "${ZBX_HELPER}" check "${args[@]+"${args[@]}"}" "${ZBX_ARGS[@]}"
+            ;;
+        ""|-h|--help) usage_zabbix ;;
+        *) usage_zabbix >&2; die "${E_USAGE}" "subcomando invalido: zabbix ${sub}" ;;
+    esac
+}
+
 # --------------------------------------------------------------- fases de carga
 OPT_WINDOW=300 OPT_CALLS=0 OPT_CPS="" OPT_CPS_START="" OPT_RAMP_STEP="" OPT_RAMP_INTERVAL=10
 OPT_LIMIT="" OPT_HOLD=30 OPT_MEDIA=rtp OPT_TESTS="sip,web" OPT_LABEL=""
@@ -645,7 +874,7 @@ prepare_sip() {
     if [[ ${OPT_MEDIA} == rtp ]]; then
         build_rtp_file "${dir}/tone.al"
     fi
-    render_scenario "${dir}/uac-did.xml" $((OPT_HOLD * 1000)) "${OPT_MEDIA}" "${dir}/tone.al"
+    render_scenario "${SCENARIO_TPL}" "${dir}/uac-did.xml" $((OPT_HOLD * 1000)) "${OPT_MEDIA}" "${dir}/tone.al"
     sipp_args "${dir}" "${local_ip}"
 }
 
@@ -678,6 +907,7 @@ run_sip_phase() {
     local dir="${RUN_DIR}/sip" local_ip=$1 t_end soft_at=0 rc=0
     raise_nofile $((OPT_LIMIT * 3 + 1024))
     phase_begin sip
+    start_uas "${RUN_DIR}/uas"
     (cd "${dir}" && exec sipp "${SIPP_ARGS[@]}" > /dev/null 2> "${dir}/sipp.stderr") &
     SIPP_PID=$!
     SIPP_SOFT_SENT=0
@@ -710,10 +940,14 @@ run_sip_phase() {
     done
     wait "${SIPP_PID}" 2>/dev/null || rc=$?
     SIPP_PID=""
+    stop_uas
     phase_end
     log "SIPp encerrado (rc=${rc}; 0 = sem falhas, 1 = houve chamadas com falha)"
     if [[ -n $(sip_real_errors "${dir}/sipp.stderr") ]]; then
         warn "SIPp stderr: $(sip_real_errors "${dir}/sipp.stderr" | head -c 300 | tr '\n' ' ')"
+    fi
+    if uas_enabled && [[ -n $(sip_real_errors "${RUN_DIR}/uas/sipp.stderr") ]]; then
+        warn "atendedor stderr: $(sip_real_errors "${RUN_DIR}/uas/sipp.stderr" | head -c 300 | tr '\n' ' ')"
     fi
 }
 
@@ -984,6 +1218,50 @@ report_sysbench() {
     fi
 }
 
+# Ultima linha do stats.csv do SIPp: valores das colunas pedidas, separados por "|"
+sipp_last() {
+    local stats=$1; shift
+    awk -F';' -v want="$*" 'NR == 1 { for (i = 1; i <= NF; i++) c[$i] = i; next } { l = $0 }
+        END {
+            if (l == "") exit 1
+            split(l, v, ";"); n = split(want, w, " ")
+            for (i = 1; i <= n; i++) printf "%s%s", (i > 1 ? "|" : ""), (w[i] in c ? v[c[w[i]]] : "")
+            printf "\n"
+        }' "${stats}"
+}
+
+report_uas() {
+    local dir=$1 stats="$1/uas/stats.csv" total ok fail unexp tmo cl mc sent lost pct="-"
+    [[ -s ${stats} ]] || { printf '  (sem dados do atendedor)\n'; return 0; }
+    IFS='|' read -r total ok fail unexp tmo cl < <(sipp_last "${stats}" TotalCallCreated \
+        "SuccessfulCall(C)" "FailedCall(C)" "FailedUnexpectedMessage(C)" "FailedTimeoutOnRecv(C)" "CallLength(C)")
+    mc=$(awk -F';' 'NR == 1 { for (i = 1; i <= NF; i++) if ($i == "CurrentCall") k = i; next }
+        k && $k + 0 > m { m = $k + 0 } END { print m + 0 }' "${stats}")
+    if (( ${ok:-0} + ${fail:-0} > 0 )); then
+        pct=$(awk -v f="${fail}" -v o="${ok}" 'BEGIN { printf "%.2f", f * 100 / (f + o) }')
+    fi
+    printf '  %-36s %s\n' "Chamadas recebidas do FS" "${total}"
+    printf '  %-36s %s\n' "Atendidas e encerradas (BYE)" "${ok}"
+    printf '  %-36s %s (%s%%)\n' "Falhas" "${fail}" "${pct}"
+    printf '  %-36s %s\n' "  mensagem inesperada" "${unexp}"
+    printf '  %-36s %s\n' "  sem BYE no prazo (hold + 120 s)" "${tmo}"
+    printf '  %-36s %s\n' "Pico de chamadas simultaneas" "${mc}"
+    printf '  %-36s %s ms\n' "Duracao media da chamada" "$(fmt_rt_ms "${cl}")"
+    if [[ -s ${dir}/sip/stats.csv ]] && sent=$(sipp_last "${dir}/sip/stats.csv" TotalCallCreated); then
+        lost=$(( ${sent:-0} - ${total:-0} ))
+        printf '  %-36s %s\n' "Originadas que nao chegaram aqui" "$((lost > 0 ? lost : 0))"
+        printf '  (recusadas pelo OpenSIPS/FS antes do bridge: confira DIDs DIRECT-IP e o errors.log do originador)\n'
+    fi
+    local reasons
+    reasons=$(sip_real_errors "${dir}/uas/errors.log" | {
+            grep -o "Aborting call on unexpected message[^']*\|receive timeout\|Dead call [^(]*" || true
+        } | sort | uniq -c | sort -rn | head -10)
+    if [[ -n ${reasons} ]]; then
+        printf '\n  Falhas por motivo (uas/errors.log):\n'
+        printf '%s\n' "${reasons}" | sed 's/^/  /'
+    fi
+}
+
 generate_report() {
     local dir=$1 out="$1/report.txt" k f
     [[ -d ${dir} ]] || die "${E_USAGE}" "diretorio de resultado inexistente: ${dir}"
@@ -1018,6 +1296,11 @@ generate_report() {
         if [[ -d ${dir}/sip ]]; then
             printf '\n== SIP (SIPp -> %s)\n' "$(awk -F= '$1 == "sip_destino" { print $2 }' "${dir}/run.env" 2>/dev/null)"
             report_sip "${dir}"
+        fi
+
+        if [[ -d ${dir}/uas ]]; then
+            printf '\n== Atendedor (SIPp UAS em %s)\n' "$(awk -F= '$1 == "atendedor" { print $2 }' "${dir}/run.env" 2>/dev/null)"
+            report_uas "${dir}"
         fi
 
         if [[ -d ${dir}/mysql ]]; then
@@ -1373,9 +1656,14 @@ Uso: $0 <acao> [opcoes]
 
 Acoes:
   check [--fs-password] valida configuracao, dependencias, SSH e comandos remotos (somente leitura)
-  smoke [--did N]       envia 1 chamada (hold 5 s) e mostra o resultado
+  smoke [--did N]       envia 1 chamada (hold 5 s) e mostra o resultado (com UAS_PORT, tambem
+                        sobe o atendedor e confere se a chamada chegou a ele)
   run [opcoes]          executa o teste completo e gera o relatorio
   report <diretorio>    regenera o report.txt de uma execucao
+  zabbix <sub>          integracao com o Zabbix (ZABBIX_* na configuracao):
+      setup             cria os hosts e vincula os templates (--import-template importa o YAML)
+      send <diretorio>  importa uma execucao (--force reenvia, --dry-run so mostra)
+      check             testa a API e o trapper
   keys <sub> [opcoes]   chaves SSH da VM de teste para os servidores:
       create            gera a chave (SSH_KEY, SSH_KEY_TYPE); nao sobrescreve uma existente
       trust             grava as chaves de host (ssh-keyscan) apos conferencia
@@ -1408,7 +1696,8 @@ Opcoes do run:
       --ramp-interval S intervalo entre degraus (padrao 10)
   -l, --max-concurrent N  limite de chamadas simultaneas (padrao: cps x (hold+4) x 1.2)
   -H, --hold SEG        duracao da chamada atendida antes do BYE (padrao 30)
-  -M, --media MODO      rtp (SIPp envia G.711 a-law) | none (sem RTP de origem) (padrao rtp)
+  -M, --media MODO      rtp (SIPp envia G.711 a-law; com UAS_PORT o atendedor tambem envia)
+                        | none (sem RTP nos SIPp) (padrao rtp)
   -t, --tests LISTA     sip,web,mysql (padrao sip,web; mysql = sysbench)
       --web-duration S  duracao de cada alvo web (padrao 30)
       --web-conns N     conexoes simultaneas do wrk (padrao 50)
@@ -1527,7 +1816,11 @@ print_plan() {
         if ((OPT_LIMIT < est_conc)); then
             warn "limite de simultaneas (${OPT_LIMIT}) abaixo do regime esperado (${est_conc}): o CPS real ficara menor"
         fi
-        if [[ ${OPT_MEDIA} == rtp ]]; then
+        if uas_enabled; then
+            printf '  atendedor          SIPp UAS em %s:%s (DIDs DIRECT-IP), RTP a partir de %s, midia %s\n' \
+                "${LOCAL_IP}" "${CFG[UAS_PORT]}" "${CFG[UAS_RTP_PORT_BASE]}" \
+                "$([[ ${OPT_MEDIA} == rtp ]] && printf 'G.711 nos dois sentidos' || printf 'sem RTP')"
+        elif [[ ${OPT_MEDIA} == rtp ]]; then
             est_vm_gb=$(awk -v c="${est_calls}" -v h="${OPT_HOLD}" -v g="${CFG[VM_GREETING_SECONDS]}" -v b="${CFG[VM_BYTES_PER_SECOND]}" \
                 'BEGIN { s = h - g; if (s < 0) s = 0; printf "%.1f", c * s * b / 1e9 }')
             printf '  caixa postal       ~%s chamadas, ~%s GB gravados nos FS (WAV 8 kHz 16 bit)\n' "${est_calls}" "${est_vm_gb}"
@@ -1565,6 +1858,11 @@ save_run_env() {
             printf 'janela_s=%s\nchamadas=%s\nhold_s=%s\nmidia=%s\nlimite_simultaneas=%s\n' \
                 "${OPT_WINDOW}" "${OPT_CALLS}" "${OPT_HOLD}" "${OPT_MEDIA}" "${OPT_LIMIT}"
             printf 'dids=%s\n' "${OPT_DID:-${DID_COUNT} de ${CFG[DID_FILE]}}"
+            if uas_enabled; then
+                printf 'atendedor=%s:%s\n' "${LOCAL_IP}" "${CFG[UAS_PORT]}"
+            else
+                printf 'atendedor=nenhum (DID atendido no FS)\n'
+            fi
         fi
         if has_test web; then
             printf 'web=%s conexoes=%s threads=%s duracao_s=%s\n' "${CFG[WEB_BASE_URL]}" "${OPT_WEB_CONNS}" "${OPT_WEB_THREADS}" "${OPT_WEB_DURATION}"
@@ -1611,6 +1909,7 @@ check_ssh_all() {
 cmd_check() {
     local id role cmd res
     check_local_deps ssh sipp wrk curl python3 awk sed shuf timeout ip nice
+    uas_enabled && check_local_deps ss
     build_hosts
     build_ssh
     load_fs_password
@@ -1625,6 +1924,12 @@ cmd_check() {
     printf '  IP de origem SIP: %s -> %s:%s\n' "${LOCAL_IP:-?}" "${SIP_TARGET_IP}" "${SIP_TARGET_PORT}"
     printf '  O destino precisa aceitar a origem: OpenSIPS (address, grp 10) ou, direto no FS,\n'
     printf '  a ACL de entrada do profile. Atras de NAT, libere o IP publico, nao este.\n'
+    if uas_enabled; then
+        printf '  Atendedor (UAS): %s:%s/udp, porta %s; RTP a partir de %s\n' "${LOCAL_IP:-?}" "${CFG[UAS_PORT]}" \
+            "$(uas_port_free && printf 'livre' || printf 'EM USO')" "${CFG[UAS_RTP_PORT_BASE]}"
+        printf '  Os DIDs precisam estar como DIRECT-IP (call_type 2) com extensions=<IP desta VM\n'
+        printf '  visto pelo FS>:%s; o firewall precisa liberar SIP e RTP dos FS para esta VM.\n' "${CFG[UAS_PORT]}"
+    fi
     if [[ -n ${CFG[DID_FILE]} ]]; then
         local tmp_csv
         tmp_csv=$(mktemp)
@@ -1646,7 +1951,7 @@ cmd_check() {
         case "${role}" in
             # max-sessions / sessions-per-second limitam o teste (padrao do repo: 1000 / 30 por no)
             fs)       cmd="$(fs_prelude)"$'\n'"fsx status | grep -E 'is ready|session\\(s\\) - peak|per Sec|session\\(s\\) max|idle cpu|rror|uth'; df -P $(printf '%q' "${CFG[FS_DISK_PATH]}") | tail -1" ;;
-            opensips) cmd="${CFG[OPENSIPS_MI_CMD]} get_statistics dialog:active_dialogs; ${CFG[OPENSIPS_MI_CMD]} lb_list | head -20" ;;
+            opensips) cmd="${CFG[OPENSIPS_MI_CMD]} get_statistics active_dialogs; ${CFG[OPENSIPS_MI_CMD]} lb_list | head -20" ;;
             db)       cmd="${CFG[MYSQL_CLI_CMD]} -N -e 'SELECT @@hostname, @@version, @@read_only'"
                       cmd+="; ${CFG[MYSQL_CLI_CMD]} -N -e \"SHOW GLOBAL STATUS WHERE Variable_name IN ('wsrep_cluster_size','wsrep_cluster_status','wsrep_local_state_comment','wsrep_ready')\""
                       cmd+="; ${CFG[MYSQL_CLI_CMD]} -e 'SHOW REPLICA STATUS\G' | grep -E 'Source_Host|Running:|Seconds_Behind' || echo 'sem replicacao assincrona (normal em Percona XtraDB Cluster)'"
@@ -1668,12 +1973,17 @@ cmd_check() {
             printf '  e se o usuario SSH pode rodar o fs_cli (FS_CLI_CMD="%s")\n' "${CFG[FS_CLI_CMD]}"
         fi
     done
+    if zbx_enabled || [[ -n ${CFG[ZABBIX_API_URL]} ]]; then
+        printf '\n== Zabbix\n'
+        cmd_zabbix check 2>&1 | sed 's/^/  /' || true
+    fi
     printf '\nSomente leitura: nada foi alterado nos servidores.\n'
 }
 
 cmd_smoke() {
     local dir rc=0
     check_local_deps sipp python3 awk sed shuf ip
+    uas_enabled && check_local_deps ss
     parse_sip_target
     LOCAL_IP=$(detect_local_ip)
     [[ -n ${LOCAL_IP} ]] || die "${E_CONFIG}" "sem rota para ${SIP_TARGET_IP}; defina SIP_LOCAL_IP"
@@ -1687,13 +1997,24 @@ cmd_smoke() {
     OPT_HOLD=5 OPT_CPS=1 OPT_CPS_START=1 OPT_CALLS=1 OPT_LIMIT=1 OPT_WINDOW=30
     [[ ${OPT_MEDIA} == rtp || ${OPT_MEDIA} == none ]] || die "${E_USAGE}" "--media deve ser rtp ou none"
     prepare_sip "${dir}" "${LOCAL_IP}"
+    if uas_enabled; then
+        uas_port_free || die "${E_CONFIG}" "UAS_PORT ${CFG[UAS_PORT]}/udp ja esta em uso nesta VM"
+        prepare_uas "${dir}/uas" "${LOCAL_IP}" "${dir}/tone.al"
+        trap '[[ -z ${UAS_PID} ]] || kill -TERM "${UAS_PID}" 2>/dev/null || true' EXIT
+        start_uas "${dir}/uas"
+    fi
     log "smoke: 1 chamada para ${OPT_DID} via ${SIP_TARGET_IP}:${SIP_TARGET_PORT} (origem ${LOCAL_IP}, midia ${OPT_MEDIA})"
     (cd "${dir}" && sipp "${SIPP_ARGS[@]}" > /dev/null 2> "${dir}/sipp.stderr") || rc=$?
+    stop_uas
     RUN_DIR=${dir}
     mkdir -p "${dir}/sip"
     mv "${dir}"/stats.csv "${dir}"/errors.log "${dir}"/actions.log "${dir}"/screen.log "${dir}/sip/" 2>/dev/null || true
     printf '\n'
     report_sip "${dir}"
+    if uas_enabled; then
+        printf '\n  Atendedor (%s:%s):\n' "${LOCAL_IP}" "${CFG[UAS_PORT]}"
+        report_uas "${dir}" | sed 's/^/  /'
+    fi
     if sip_real_errors "${dir}/sip/errors.log" | grep -q 'Aborting\|timeout'; then
         printf '\n  Primeiro erro:\n'
         sip_real_errors "${dir}/sip/errors.log" | grep -m1 -A12 'Aborting\|timeout' | sed 's/^/    /' || true
@@ -1712,8 +2033,10 @@ cmd_run() {
     validate_run_opts
     local -a deps=(ssh curl awk sed timeout nice)
     has_test sip && deps+=(sipp python3 shuf ip)
+    has_test sip && uas_enabled && deps+=(ss)
     has_test web && deps+=(wrk)
     has_test mysql && deps+=(sysbench mysql)
+    zbx_enabled && [[ ${CFG[ZABBIX_LIVE]} == 1 ]] && deps+=(python3)
     check_local_deps "${deps[@]}"
     build_hosts
     build_ssh
@@ -1729,6 +2052,9 @@ cmd_run() {
         tmp=$(mktemp)
         build_calls_csv "${tmp}" "${OPT_DID}"
         rm -f "${tmp}"
+        if uas_enabled && ! uas_port_free; then
+            die "${E_CONFIG}" "UAS_PORT ${CFG[UAS_PORT]}/udp ja esta em uso nesta VM"
+        fi
     fi
 
     print_plan
@@ -1738,6 +2064,12 @@ cmd_run() {
             printf 'sipp'
             printf ' %q' "${SIPP_ARGS[@]}"
             printf '\n'
+            if uas_enabled; then
+                uas_args "${RUN_DIR}/uas" "${LOCAL_IP}"
+                printf 'sipp'
+                printf ' %q' "${UAS_ARGS[@]}"
+                printf '\n'
+            fi
         fi
         log "dry-run: nada foi executado"
         RUN_DIR=""
@@ -1763,12 +2095,14 @@ cmd_run() {
     write_hosts_tsv
     if has_test sip; then
         prepare_sip "${RUN_DIR}/sip" "${LOCAL_IP}"
+        prepare_uas "${RUN_DIR}/uas" "${LOCAL_IP}" "${RUN_DIR}/sip/tone.al"
     fi
 
     snapshot pre
     max_coll=$(( CFG[BASELINE_SECONDS] + CFG[COOLDOWN_SECONDS] + OPT_WINDOW + OPT_HOLD + 180
                + (OPT_WEB_DURATION + 15) * 3 + OPT_MYSQL_DURATION * 2 + 600 ))
     start_collectors "${max_coll}"
+    zabbix_live_start
 
     phase_begin baseline
     wait_seconds "${CFG[BASELINE_SECONDS]}"
@@ -1798,6 +2132,7 @@ cmd_run() {
     snapshot post
     [[ -z ${ABORT_REASON} ]] || printf '%s\n' "${ABORT_REASON}" > "${RUN_DIR}/abort.txt"
     generate_report "${RUN_DIR}"
+    zabbix_live_stop
     tar -C "${CFG[RESULTS_DIR]}" -czf "${RUN_DIR}.tar.gz" "${RUN_ID}" \
         && log "pacote: ${RUN_DIR}.tar.gz"
     if [[ -n ${ABORT_REASON} ]]; then
@@ -1819,7 +2154,7 @@ main() {
     done
     case "${action}" in
         ""|-h|--help|help) usage; exit 0 ;;
-        check|smoke|run|report|keys) ;;
+        check|smoke|run|report|keys|zabbix) ;;
         *) usage >&2; die "${E_USAGE}" "acao invalida: ${action}" ;;
     esac
     if [[ ${action} == report ]]; then
@@ -1847,6 +2182,7 @@ main() {
             cmd_smoke
             ;;
         run) cmd_run "${rest[@]+"${rest[@]}"}" ;;
+        zabbix) cmd_zabbix "${rest[@]+"${rest[@]}"}" ;;
     esac
 }
 
