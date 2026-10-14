@@ -4,6 +4,10 @@
 #   stfc_int 172.30.4.0/24    = rede interna 172.17.4.0/24 (172.17/16 e do Docker; 172.18/16 ja usada)
 #   stfc_pub 172.30.177.0/24  = IPs publicos 200.159.177.x (mesmos finais)
 # A vm-teste fica so na rede "publica", como a VM no Parallels: nao alcanca o VIP.
+#   zbx      172.30.10.0/24   Zabbix (server, web e PostgreSQL); server e web tambem na "publica"
+#
+# Acesso a partir do macOS (Docker Desktop nao roteia para os IPs dos containers):
+# portas publicadas so em 127.0.0.1, configuraveis no .env (LAB_PORT_*). Ver "lab.sh status".
 #
 # Use pelo lab.sh (gera o .env com as senhas e a configuracao do flux-loadtest).
 
@@ -18,6 +22,14 @@ networks:
     ipam:
       config:
         - subnet: 172.30.177.0/24
+  zbx:
+    ipam:
+      config:
+        - subnet: 172.30.10.0/24
+
+volumes:
+  # Historico do Zabbix sobrevive ao "lab.sh down" (apagar: lab.sh down --zabbix)
+  zbx-db:
 
 services:
   sbc-stfc-1:
@@ -28,6 +40,8 @@ services:
     environment:
       LAB_SIP_ROLES: "opensips fs"
       LAB_PUB_IP: 172.30.177.163
+    ports:
+      - "127.0.0.1:${LAB_PORT_SSH_SBC1:-22163}:22"
     networks:
       stfc_int: { ipv4_address: 172.30.4.163 }
       stfc_pub: { ipv4_address: 172.30.177.163 }
@@ -40,6 +54,8 @@ services:
     environment:
       LAB_SIP_ROLES: "fs"
       LAB_PUB_IP: 172.30.177.162
+    ports:
+      - "127.0.0.1:${LAB_PORT_SSH_SBC2:-22162}:22"
     networks:
       stfc_int: { ipv4_address: 172.30.4.162 }
       stfc_pub: { ipv4_address: 172.30.177.162 }
@@ -55,6 +71,8 @@ services:
       LAB_DB_ADDR: 172.30.4.161
       LAB_DB_PEER: 172.30.4.164
       LAB_VRRP_PRIORITY: "150"
+    ports:
+      - "127.0.0.1:${LAB_PORT_SSH_DB1:-22161}:22"
     networks:
       stfc_int: { ipv4_address: 172.30.4.161 }
       stfc_pub: { ipv4_address: 172.30.177.161 }
@@ -71,6 +89,8 @@ services:
       LAB_DB_ADDR: 172.30.4.164
       LAB_DB_PEER: 172.30.4.161
       LAB_VRRP_PRIORITY: "100"
+    ports:
+      - "127.0.0.1:${LAB_PORT_SSH_DB2:-22164}:22"
     networks:
       stfc_int: { ipv4_address: 172.30.4.164 }
       stfc_pub: { ipv4_address: 172.30.177.164 }
@@ -80,6 +100,10 @@ services:
     image: flux-stfc-lab/web
     hostname: sbc-stfc-interfaceweb
     env_file: .env
+    ports:
+      - "127.0.0.1:${LAB_PORT_WEB_HTTPS:-8443}:443"
+      - "127.0.0.1:${LAB_PORT_WEB_HTTP:-8081}:80"
+      - "127.0.0.1:${LAB_PORT_SSH_WEB:-22165}:22"
     networks:
       stfc_int: { ipv4_address: 172.30.4.165 }
       stfc_pub: { ipv4_address: 172.30.177.165 }
@@ -94,3 +118,56 @@ services:
       - ./out/results:/var/lib/flux-loadtest/results
     networks:
       stfc_pub: { ipv4_address: 172.30.177.50 }
+
+  # ------------------------------------------------------------------ Zabbix
+  zabbix-db:
+    image: postgres:17-bookworm
+    hostname: zabbix-db
+    environment:
+      POSTGRES_DB: zabbix
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: ${LAB_ZBX_DB_PASSWORD:?rode lab.sh up}
+    volumes:
+      - zbx-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zabbix -d zabbix"]
+      interval: 5s
+      retries: 30
+    networks:
+      zbx: { ipv4_address: 172.30.10.5 }
+
+  zabbix-server:
+    image: zabbix/zabbix-server-pgsql:ubuntu-${LAB_ZABBIX_VERSION:-7.4.15}
+    hostname: zabbix-server
+    depends_on:
+      zabbix-db: { condition: service_healthy }
+    environment:
+      DB_SERVER_HOST: zabbix-db
+      POSTGRES_DB: zabbix
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: ${LAB_ZBX_DB_PASSWORD:?rode lab.sh up}
+      ZBX_CACHESIZE: 64M
+      ZBX_STARTTRAPPERS: "10"
+    ports:
+      - "127.0.0.1:${LAB_PORT_ZABBIX_TRAPPER:-10051}:10051"
+    networks:
+      zbx: { ipv4_address: 172.30.10.10 }
+      stfc_pub: { ipv4_address: 172.30.177.10 }
+
+  zabbix-web:
+    image: zabbix/zabbix-web-nginx-pgsql:ubuntu-${LAB_ZABBIX_VERSION:-7.4.15}
+    hostname: zabbix-web
+    depends_on: [zabbix-server]
+    environment:
+      ZBX_SERVER_HOST: zabbix-server
+      ZBX_SERVER_NAME: Flux STFC lab
+      DB_SERVER_HOST: zabbix-db
+      POSTGRES_DB: zabbix
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: ${LAB_ZBX_DB_PASSWORD:?rode lab.sh up}
+      PHP_TZ: America/Sao_Paulo
+    ports:
+      - "127.0.0.1:${LAB_PORT_ZABBIX_WEB:-8080}:8080"
+    networks:
+      zbx: { ipv4_address: 172.30.10.11 }
+      stfc_pub: { ipv4_address: 172.30.177.11 }

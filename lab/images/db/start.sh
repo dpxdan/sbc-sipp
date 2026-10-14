@@ -28,10 +28,15 @@ install -m 0600 -o loadtest -g loadtest /dev/null /etc/mysql/flux-loadtest.cnf
 printf '[client]\nuser=flux_monitor\npassword=%s\nsocket=/var/run/mysqld/mysqld.sock\n' \
     "${LAB_MONITOR_PASSWORD}" > /etc/mysql/flux-loadtest.cnf
 
+# wait_sock [pid]: espera o socket do mysqld (ate 10 min; o SST com CPU disputada e lento);
+# com pid, desiste se o processo morrer (SST com falha)
 wait_sock() {
-    local i
-    for ((i = 0; i < 180; i++)); do
+    local i pid=${1:-}
+    for ((i = 0; i < 600; i++)); do
         mysqladmin --socket=/var/run/mysqld/mysqld.sock ping >/dev/null 2>&1 && return 0
+        if [[ -n ${pid} ]] && ! kill -0 "${pid}" 2>/dev/null; then
+            return 1
+        fi
         sleep 1
     done
     return 1
@@ -66,15 +71,33 @@ GRANT SELECT ON loadtest.* TO 'labcheck'@'localhost';
 SQL
     log "schemas e usuarios criados"
 else
-    log "aguardando o no 1 (${LAB_DB_PEER}:4567)"
-    for ((i = 0; i < 300; i++)); do
-        nc -z "${LAB_DB_PEER}" 4567 2>/dev/null && break
-        sleep 1
+    # O no 1 so serve de doador depois de aceitar conexoes (3306) e criar os usuarios;
+    # SST pedido antes disso falha com "WSREP has not yet prepared node for application use".
+    # Com CPU disputada a corrida ainda pode acontecer: o SST e repetido ate 3 vezes.
+    joined=0
+    for attempt in 1 2 3; do
+        log "aguardando o no 1 (${LAB_DB_PEER}:3306)"
+        for ((i = 0; i < 300; i++)); do
+            nc -z "${LAB_DB_PEER}" 3306 2>/dev/null && break
+            sleep 1
+        done
+        sleep 10
+        log "entrando no cluster (SST, tentativa ${attempt}/3)"
+        # datadir do joiner limpo a cada tentativa (dados do laboratorio sao efemeros)
+        find /var/lib/mysql -mindepth 1 -delete
+        mysqld --user=mysql &
+        pid=$!
+        if wait_sock "${pid}"; then
+            joined=1
+            break
+        fi
+        # tempo esgotado com o mysqld vivo: encerra antes de tentar de novo
+        kill -TERM "${pid}" 2>/dev/null || true
+        wait "${pid}" 2>/dev/null || true
+        log "SST falhou (veja /var/log/mysql/error.log); nova tentativa em 15 s"
+        sleep 15
     done
-    sleep 5
-    log "entrando no cluster (SST)"
-    mysqld --user=mysql &
-    wait_sock || { log "mysqld nao subiu; veja /var/log/mysql/error.log"; exit 1; }
+    ((joined)) || { log "no 2 nao entrou no cluster apos 3 tentativas"; exit 1; }
 fi
 log "mysqld ativo"
 

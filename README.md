@@ -31,6 +31,7 @@ resultado é um relatório `.txt` por execução, com os dados brutos ao lado.
 16. [Referência das funções](#16-referência-das-funções)
 17. [Solução de problemas](#17-solução-de-problemas)
 18. [Limitações](#18-limitações)
+19. [Zabbix](#19-zabbix)
 
 ---
 
@@ -93,12 +94,15 @@ Consequências para o teste:
 
 | Arquivo | Função |
 |---|---|
-| `flux-loadtest.sh` | Orquestrador. Ações: `keys`, `check`, `smoke`, `run`, `report` |
+| `flux-loadtest.sh` | Orquestrador. Ações: `keys`, `check`, `smoke`, `run`, `report`, `zabbix` |
 | `lib/collector.sh` | Coletor de métricas enviado por SSH (`bash -s`); lê `/proc` e comandos de status |
+| `lib/flux_zabbix.py` | Envio ao Zabbix por trapper (ao vivo e importação) e provisionamento dos hosts pela API (seção 19) |
+| `zabbix/flux-loadtest-templates.yaml` | Templates do Zabbix 7.4 (gerado; não editar à mão) |
+| `zabbix/gen_templates.py` | Gerador dos templates a partir das colunas do coletor |
 | `scenarios/uac-did.xml.in` | Modelo do cenário SIPp: INVITE -> 200 -> ACK -> RTP opcional -> BYE |
 | `loadtest.conf.example` | Configuração comentada (copiar para `loadtest.conf`) |
 | `dids.txt.example` | Formato do arquivo de DIDs e consulta para exportá-los do banco |
-| `lab/` | Laboratório STFC em Docker para validar o script sem tocar na produção: banco (Percona XtraDB Cluster 8.4.10 + keepalived) e web (nginx 1.22.1 + PHP-FPM 7.3.33) reais, OpenSIPS/FreeSWITCH simulados (veja `lab/README.md`) |
+| `lab/` | Laboratório STFC em Docker para validar o script sem tocar na produção: banco (Percona XtraDB Cluster 8.4.10 + keepalived) e web (nginx 1.22.1 + PHP-FPM 7.3.33) reais, OpenSIPS/FreeSWITCH simulados e Zabbix 7.4, com acesso pelo macOS (veja `lab/README.md`) |
 
 ## 3. Requisitos
 
@@ -137,11 +141,11 @@ Só se for usar `--tests mysql`:
 apt install sysbench default-mysql-client
 ```
 
-**2. Copiar os arquivos** do repositório para a VM (a partir da máquina que tem o
-repositório):
+**2. Copiar os arquivos** do repositório para a VM (a partir do diretório raiz deste
+repositório, na máquina que tem o clone):
 
 ```bash
-scp -r misc/loadtest usuario@VM_DE_TESTE:/tmp/
+scp -r . usuario@VM_DE_TESTE:/tmp/loadtest
 ```
 
 Na VM:
@@ -151,7 +155,7 @@ mkdir -p /opt/flux-loadtest && cp -r /tmp/loadtest/. /opt/flux-loadtest/
 ```
 
 ```bash
-chmod +x /opt/flux-loadtest/flux-loadtest.sh /opt/flux-loadtest/lib/collector.sh
+chmod +x /opt/flux-loadtest/flux-loadtest.sh /opt/flux-loadtest/lib/collector.sh /opt/flux-loadtest/lib/flux_zabbix.py
 ```
 
 **3. Diretórios de configuração e resultados:**
@@ -294,6 +298,18 @@ Numa VM de teste dentro da rede interna, use os IPs 172.17.4.x.
 | `SAMPLE_INTERVAL` | `5` | Intervalo de coleta (s) |
 | `BASELINE_SECONDS` / `COOLDOWN_SECONDS` | `60` / `60` | Fases sem carga antes e depois |
 | `RESULTS_DIR` | `/var/lib/flux-loadtest/results` | Onde os resultados são gravados |
+
+### 5.9 Zabbix (opcional)
+
+| Chave | Padrão | Descrição |
+|---|---|---|
+| `ZABBIX_SERVER` | vazio (sem Zabbix) | Servidor ou proxy Zabbix que recebe os valores por trapper |
+| `ZABBIX_PORT` | `10051` | Porta do trapper |
+| `ZABBIX_HOST_PREFIX` | `flt-` | Prefixo dos hosts no Zabbix (`flt-fs1`, `flt-run`...) |
+| `ZABBIX_LIVE` | `1` | `1` envia durante o `run`; `0` só pela importação (`zabbix send`) |
+| `ZABBIX_API_URL` | vazio | `https://.../api_jsonrpc.php`; usada só por `zabbix setup` e `zabbix check` |
+| `ZABBIX_API_TOKEN_FILE` | vazio | Arquivo 0600 com o token de API (64 hexadecimais) |
+| `ZABBIX_TLS_INSECURE` | `0` | `1` aceita certificado autoassinado na API |
 
 ## 6. Preparação dos servidores
 
@@ -536,6 +552,26 @@ depois de atualizar o script). Não precisa de configuração nem de SSH.
 
 ```bash
 ./flux-loadtest.sh report /var/lib/flux-loadtest/results/20261007-120000-c1000-cps100
+```
+
+### 7.6 `zabbix` — integração com o Zabbix
+
+**Função:** criar os hosts no Zabbix, importar uma execução e testar a conexão. O
+envio ao vivo não tem comando próprio: o `run` faz quando `ZABBIX_SERVER` está
+preenchido (seção 19).
+
+| Subcomando | O que faz |
+|---|---|
+| `setup [--import-template]` | Cria o grupo `Flux Loadtest` e um host por servidor da configuração, mais `gen` e `run`, e vincula os templates. `--import-template` importa (ou atualiza) os templates antes |
+| `send <diretório> [--force] [--dry-run]` | Envia uma execução com os timestamps originais. Recusa uma execução já enviada (`zabbix.sent`), porque o Zabbix duplicaria os valores; `--force` reenvia |
+| `check` | Versão da API, hosts com o prefixo e um valor de teste no trapper |
+
+```bash
+./flux-loadtest.sh zabbix setup --import-template
+```
+
+```bash
+./flux-loadtest.sh zabbix send /var/lib/flux-loadtest/results/20261007-120000-c1000-cps100
 ```
 
 ## 8. Exemplos de testes
@@ -956,6 +992,8 @@ memória disponível, CPU ociosa do FS) e `+` a variação de um contador.
 | `snapshots/<host>-pre.txt`, `-post.txt` | Estado antes e depois (`status`, `lb_list`, réplica, PHP-FPM) |
 | `guard.log` | Cada amostra acima de um limite |
 | `abort.txt` | Motivo da interrupção (só quando houve) |
+| `phases-start.tsv` | Início de cada fase, gravado na hora (usado pelo envio ao vivo) |
+| `zabbix.log`, `zabbix.sent` | Log do envio ao Zabbix e marca de execução já enviada (servidor, prefixo, modo) |
 | `clock.tsv`, `console.log` | Diferença de relógio e saída do terminal |
 
 O diretório também é empacotado em `RESULTS_DIR/<execução>.tar.gz`.
@@ -1145,6 +1183,14 @@ saturar, porque nesse caso os números deixam de representar os servidores.
 | `keys_deploy`, `keys_test`, `keys_revoke` | Instalação, teste e remoção |
 | `confirm`, `set_config_value` | Confirmação interativa e gravação de chave na configuração (com backup) |
 
+**Zabbix**
+
+| Função | O que faz |
+|---|---|
+| `zbx_enabled`, `zbx_trap_args`, `zbx_api_args` | `ZABBIX_SERVER` preenchido; argumentos do trapper e da API para o `lib/flux_zabbix.py` |
+| `zabbix_live_start`, `zabbix_live_stop` | Inicia o envio ao vivo depois dos coletores; no fim (ou na saída por erro) pede o envio final e espera até 60 s |
+| `cmd_zabbix`, `usage_zabbix` | Subcomandos `setup`, `send` e `check` |
+
 ### 16.2 `lib/collector.sh`
 
 | Função | O que faz |
@@ -1157,6 +1203,16 @@ saturar, porque nesse caso os números deixam de representar os servidores.
 | `counter_rate` | Transforma contador acumulado em taxa por segundo |
 | `app_header`, `app_sample` | Colunas e amostra das métricas do serviço por papel (inclui Percona XtraDB Cluster e VIP no banco) |
 | `rate`, `now_us`, `fmt1`, `fmt2` | Taxas com o intervalo real e formatação decimal sem depender de locale |
+
+### 16.3 `lib/flux_zabbix.py`
+
+| Classe / função | O que faz |
+|---|---|
+| `Sender` | Protocolo do trapper (`ZBXD\x01`, lotes de 250 valores); mantém a fila se o Zabbix cair (modo ao vivo) |
+| `Tail` | Lê só linhas completas novas de um arquivo ainda em escrita |
+| `RunReader` | Converte o diretório da execução em valores: `metrics/*.csv`, `sip/stats.csv`, fases, `guard.log`, `wrk`, `sysbench`, `run.env` e o resultado final |
+| `parse_wrk`, `parse_sysbench_summary` | Extraem req/s, latências, erros, tps/qps |
+| `cmd_send`, `cmd_setup`, `cmd_check`, `cmd_bootstrap` | Subcomandos; `bootstrap` é só do laboratório (senha inicial do Admin e token) |
 
 ## 17. Solução de problemas
 
@@ -1179,6 +1235,9 @@ saturar, porque nesse caso os números deixam de representar os servidores.
 | `--tests mysql` não conecta | VIP 172.17.4.100 fora do alcance da VM | Rodar o sysbench de uma VM na rede 172.17.4.0/24 |
 | `wrk` sem resultado: "Servname not supported for ai_socktype" | Debian mínimo sem `/etc/services` (pacote `netbase`) | O script já passa a porta explícita na URL do `wrk`; instale o `netbase` se usar o `wrk` à mão |
 | Página PHP com HTTP 500 e "authentication method unknown to the client" | PHP 7.3 não autentica no `caching_sha2_password` (padrão do MySQL 8.4) | Usuário da aplicação com `mysql_native_password` e `mysql_native_password=ON` no servidor |
+| `zabbix.log`: "valores recusados" | Host ou item inexistente no Zabbix | `zabbix setup --import-template`; conferir `ZABBIX_HOST_PREFIX` |
+| `zabbix send`: "execucao ja enviada" | A execução já foi enviada ao vivo ou importada | Só use `--force` se os valores não chegaram (ver `zabbix.log`) |
+| Item do Zabbix sem "último valor" após importação | O Zabbix só mostra como último valor dados das últimas 24 h | Ver em Monitoramento > Últimos dados > Histórico, ou nos gráficos com o período da execução |
 | `udp_rcvbuf_err_s` alto na VM com `--media rtp` | O rtpstream do SIPp não consome o RTP devolvido pelo FS | Esperado; não afeta o teste |
 | Aviso de `ulimit -n` | Limite de arquivos abertos baixo | Rodar como root ou ajustar `/etc/security/limits.conf` |
 
@@ -1188,5 +1247,95 @@ saturar, porque nesse caso os números deixam de representar os servidores.
 - As métricas de rede somam todas as interfaces exceto `lo`.
 - O consumo de cada thread é atribuído ao último núcleo em que ela rodou no intervalo.
 - O cenário cobre só INVITE para DID com caixa postal; não registra ramais.
-- Integração com o Zabbix 6.4 fica para uma versão seguinte; os CSVs em `metrics/` já
-  têm formato estável para isso.
+- O envio ao Zabbix não usa criptografia (sem TLS/PSK no trapper): use em rede interna
+  ou por um proxy Zabbix local à VM de teste.
+- Os templates são gerados no formato do Zabbix 7.4 (`zabbix/gen_templates.py --version`
+  muda só o cabeçalho; outra versão de servidor precisa ser validada no import).
+
+## 19. Zabbix
+
+### 19.1 Como funciona
+
+```
+VM de teste                                         Zabbix (server ou proxy)
+  run -> RUN_DIR (metrics/, sip/, phases, guard)      trapper :10051
+           \-- lib/flux_zabbix.py send --follow ------> hosts <prefixo><id>
+  zabbix send RUN_DIR (importação) -------------------/     itens dependentes (JSONPath)
+```
+
+- Nada muda nos servidores: o Zabbix recebe o que a VM de teste já coleta.
+- **Ao vivo:** com `ZABBIX_SERVER` e `ZABBIX_LIVE=1`, o `run` inicia o envio depois dos
+  coletores e lê os arquivos a cada 2 s. Se o Zabbix cair, os valores ficam na fila e o
+  teste continua; o resultado vai para `zabbix.log`.
+- **Importação:** `zabbix send` reenvia qualquer execução (inclusive antigas ou de
+  produção copiadas para outra máquina) com os timestamps originais.
+
+### 19.2 Hosts e templates
+
+| Host | Templates | Origem dos dados |
+|---|---|---|
+| `<prefixo>opensips` | Sistema + OpenSIPS | `metrics/opensips.csv` |
+| `<prefixo>fs1`, `fs2` | Sistema + FreeSWITCH | `metrics/fsN.csv` |
+| `<prefixo>db1`, `db2` | Sistema + MySQL PXC | `metrics/dbN.csv` |
+| `<prefixo>web` | Sistema + Web | `metrics/web.csv` |
+| `<prefixo>gen` | Sistema + Gerador | `metrics/gen.csv` (macro `{$FLT.CPU.MAX}` = `GUARD_MAX_GEN_CPU_PCT`) |
+| `<prefixo>run` | Execução | `run.env`, fases, `sip/stats.csv`, `web/`, `mysql/`, `guard.log`, `abort.txt` |
+
+Chaves trapper (o template extrai cada métrica do JSON por item dependente):
+
+| Chave | Conteúdo |
+|---|---|
+| `flt.sys` | Colunas de sistema do coletor (CPU, memória, rede, disco) |
+| `flt.app` | Colunas do serviço e dos processos (`fs_*`, `os_*`, `db_*`, `ngx_*`, `fpm_*`, `<processo>_cpu_pct`...) |
+| `flt.sip` | Uma linha do `stats.csv` do SIPp: CPS alvo e real, simultâneas, sucesso/falha no período e acumulado, retransmissões, watchdog, INVITE->100/200 |
+| `flt.web` | Resultado do `wrk` por alvo (`static`, `php`, `extra`): req/s, latências p50/p90/p99, erros |
+| `flt.mysql` | Intervalos (`*_now`) e resumo do `sysbench` |
+| `flt.run.info`, `flt.phase`, `flt.guard`, `flt.result` | Parâmetros, fase em andamento, eventos do guard e resultado (`ok`/`interrompido`, totais SIP) |
+
+Unidades convertidas no template: MB -> B, Mbps -> bps, kB/s -> B/s.
+
+### 19.3 Gatilhos
+
+Seguem os limites do guard (seção 12), com a mesma regra de 3 amostras seguidas, e
+usam macros que podem ser ajustadas no host:
+
+| Gatilho | Macro (padrão) |
+|---|---|
+| CPU, memória, disco livre | `{$FLT.CPU.MAX}` (85), `{$FLT.MEM.MAX}` (90), `{$FLT.DISK.FREE.MIN}` (15) |
+| Descarte de UDP por buffer cheio | — |
+| FreeSWITCH: CPU ociosa baixa, perto de `max-sessions` | `{$FLT.FS.IDLE.MIN}` (10), `{$FLT.FS.SESSIONS.MAX}` (900) |
+| OpenSIPS: memória compartilhada | `{$FLT.OS.SHM.MAX}` (80) |
+| PXC: tamanho do cluster, flow control, fora do Primary | `{$FLT.WSREP.SIZE.MIN}` (2), `{$FLT.WSREP.FC.MAX}` (10) |
+| PHP-FPM com fila | — |
+| Falhas SIP por período, watchdog do SIPp | `{$FLT.SIP.FAIL.MAX}` (5) |
+| Execução interrompida | — (recupera na próxima execução `ok`) |
+
+Os problemas se recuperam quando o valor volta ao normal ou quando os dados param por
+`{$FLT.NODATA}` (5 min, fim do teste), e podem ser fechados manualmente.
+
+### 19.4 Preparação (uma vez por Zabbix)
+
+1. Token de API: *Users > API tokens*, para um usuário com escrita em hosts e templates.
+   Grave num arquivo 0600 na VM de teste e aponte `ZABBIX_API_TOKEN_FILE`.
+2. Liberar a VM de teste para o trapper (10051) do server ou de um proxy.
+3. Preencher `ZABBIX_*` no `loadtest.conf` e rodar:
+
+```bash
+./flux-loadtest.sh zabbix setup --import-template
+```
+
+```bash
+./flux-loadtest.sh zabbix check
+```
+
+O `check` geral também testa o Zabbix quando ele está configurado.
+
+### 19.5 Atualizar os templates
+
+Os templates são gerados a partir das colunas do coletor. Depois de mudar o
+`lib/collector.sh`, atualize as listas em `zabbix/gen_templates.py`, gere de novo e
+reimporte (`zabbix setup --import-template`):
+
+```bash
+python3 zabbix/gen_templates.py > zabbix/flux-loadtest-templates.yaml
+```

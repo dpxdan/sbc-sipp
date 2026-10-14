@@ -162,3 +162,18 @@ SAMPLE_INTERVAL=5
 BASELINE_SECONDS=60
 COOLDOWN_SECONDS=60
 RESULTS_DIR=/var/lib/flux-loadtest/results
+
+# ------------------------------------------------------------------ Zabbix (opcional)
+# Vazio = sem Zabbix. Com ZABBIX_SERVER, o run envia as amostras por trapper (porta
+# 10051, sem criptografia: use so em rede interna) e "zabbix send" importa execucoes antigas.
+# Templates: zabbix/flux-loadtest-templates.yaml. Hosts: <prefixo><id> (flt-fs1, flt-run...).
+ZABBIX_SERVER=
+ZABBIX_PORT=10051
+ZABBIX_HOST_PREFIX=flt-
+# 1 = envia durante o run; 0 = so pela importacao depois do teste
+ZABBIX_LIVE=1
+# API, usada so por "zabbix setup" e "zabbix check" (ex.: https://zabbix.exemplo/api_jsonrpc.php)
+ZABBIX_API_URL=
+# Token de API num arquivo 0600 (Users > API tokens). Permissao de escrita em hosts.
+ZABBIX_API_TOKEN_FILE=
+ZABBIX_TLS_INSECURE=0

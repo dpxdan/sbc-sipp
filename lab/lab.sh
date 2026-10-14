@@ -5,8 +5,9 @@
 # Sobe 6 containers Debian 12 com os mesmos nomes, papeis e finais de IP do
 # ambiente STFC: OpenSIPS/FreeSWITCH simulados (SIPp), Percona XtraDB Cluster
 # 8.4.10 real com keepalived, nginx 1.22.1 + PHP-FPM 7.3.33 reais e a VM de teste.
+# Mais o Zabbix (server, web e PostgreSQL) que recebe as amostras do flux-loadtest.
 #
-# Uso: ./lab.sh up|conf|status|shell|interna|externa|down [opcoes]
+# Uso: ./lab.sh up|conf|status|keys|zabbix|shell|interna|externa|down [opcoes]
 
 set -Eeuo pipefail
 
@@ -28,12 +29,16 @@ Uso: $0 <acao> [opcoes]
                         espera o cluster e gera a configuracao do flux-loadtest
   conf [--dids ARQ]     (re)gera out/loadtest.conf, out/dids.txt e os arquivos de senha;
                         sem --dids, gera 100 mil DIDs ficticios
-  status                containers, estado do Percona XtraDB Cluster e no do VIP
+  status                containers, estado do Percona XtraDB Cluster e no do VIP, enderecos
+                        de acesso pelo macOS
   keys                  roda "flux-loadtest.sh keys setup" na vm-teste respondendo a senha do
                         usuario loadtest de cada servidor (expect; senha so do laboratorio)
+  zabbix                troca a senha inicial do Admin do Zabbix, cria o token de API, importa
+                        os templates e cria os hosts (o up ja faz isso)
   shell                 abre um shell na vm-teste (onde o flux-loadtest roda)
   interna | externa     liga/desliga a vm-teste da rede interna (necessario para --tests mysql)
-  down                  remove os containers e as redes (dados do laboratorio sao efemeros)
+  down [--zabbix]       remove os containers e as redes (dados do laboratorio sao efemeros);
+                        --zabbix apaga tambem o historico do Zabbix (volume zbx-db)
 
 Dentro da vm-teste:
   cd /opt/flux-loadtest && ./flux-loadtest.sh check -c /etc/flux-loadtest/loadtest.conf
@@ -48,23 +53,36 @@ require_docker() {
 
 rand() { od -An -N16 -tx1 /dev/urandom | tr -d ' \n'; }
 
+# Acrescenta CHAVE=valor ao .env se ausente (migra .env de versoes anteriores do laboratorio)
+env_add() {
+    grep -q "^$1=" "${ENV_FILE}" 2>/dev/null || printf '%s=%s\n' "$1" "$2" >> "${ENV_FILE}"
+}
+
 ensure_env() {
-    if [[ -f ${ENV_FILE} ]]; then
-        return 0
+    local created=0
+    if [[ ! -f ${ENV_FILE} ]]; then
+        (umask 077 && printf '# Gerado pelo lab.sh: senhas do laboratorio (nao versionar)\n' > "${ENV_FILE}")
+        created=1
     fi
-    umask 077
-    {
-        printf '# Gerado pelo lab.sh: senhas do laboratorio (nao versionar)\n'
-        printf 'LAB_LOADTEST_PASSWORD=%s\n' "$(rand)"
-        printf 'LAB_ADMIN_PASSWORD=%s\n' "$(rand)"
-        printf 'LAB_MYSQL_ROOT_PASSWORD=%s\n' "$(rand)"
-        printf 'LAB_MONITOR_PASSWORD=%s\n' "$(rand)"
-        printf 'LAB_BENCH_PASSWORD=%s\n' "$(rand)"
-        printf 'LAB_WEB_DB_PASSWORD=%s\n' "$(rand)"
-        printf 'LAB_FS_CLI_PASSWORD=%s\n' "$(rand)"
-        printf 'LAB_VM_MAX_SECONDS=120\n'
-    } > "${ENV_FILE}"
-    log ".env criado com senhas aleatorias (${ENV_FILE})"
+    env_add LAB_LOADTEST_PASSWORD "$(rand)"
+    env_add LAB_ADMIN_PASSWORD "$(rand)"
+    env_add LAB_MYSQL_ROOT_PASSWORD "$(rand)"
+    env_add LAB_MONITOR_PASSWORD "$(rand)"
+    env_add LAB_BENCH_PASSWORD "$(rand)"
+    env_add LAB_WEB_DB_PASSWORD "$(rand)"
+    env_add LAB_FS_CLI_PASSWORD "$(rand)"
+    env_add LAB_VM_MAX_SECONDS 120
+    env_add LAB_ZBX_DB_PASSWORD "$(rand)"
+    env_add LAB_ZBX_ADMIN_PASSWORD "$(rand)"
+    ((created)) && log ".env criado com senhas aleatorias (${ENV_FILE})"
+    return 0
+}
+
+# Porta publicada no macOS: valor do .env ou o padrao do docker-compose.yml
+port() {
+    local v
+    v=$(env_get "$1")
+    printf '%s' "${v:-$2}"
 }
 
 env_get() {
@@ -96,10 +114,7 @@ cmd_conf() {
         log "100000 DIDs ficticios gerados"
     fi
 
-    umask 077
-    env_get LAB_FS_CLI_PASSWORD > "${OUT_DIR}/fs_cli.pass"
-    env_get LAB_BENCH_PASSWORD > "${OUT_DIR}/mysql_bench.pass"
-    env_get LAB_LOADTEST_PASSWORD > "${OUT_DIR}/loadtest.pass"
+    write_secrets
 
     cat > "${OUT_DIR}/loadtest.conf" <<'CONF'
 # flux-loadtest - laboratorio STFC em Docker (gerado pelo lab.sh)
@@ -142,23 +157,58 @@ BASELINE_SECONDS=20
 COOLDOWN_SECONDS=20
 RESULTS_DIR=/var/lib/flux-loadtest/results
 CONF
+    zabbix_conf >> "${OUT_DIR}/loadtest.conf"
     log "configuracao gerada em ${OUT_DIR}/loadtest.conf (na vm-teste: /etc/flux-loadtest/loadtest.conf)"
 }
 
+write_secrets() {
+    (
+        umask 077
+        env_get LAB_FS_CLI_PASSWORD > "${OUT_DIR}/fs_cli.pass"
+        env_get LAB_BENCH_PASSWORD > "${OUT_DIR}/mysql_bench.pass"
+        env_get LAB_LOADTEST_PASSWORD > "${OUT_DIR}/loadtest.pass"
+        env_get LAB_ZBX_ADMIN_PASSWORD > "${OUT_DIR}/zabbix_admin.pass"
+    )
+}
+
+zabbix_conf() {
+    cat <<'CONF'
+
+# Zabbix do laboratorio (zabbix-server 172.30.177.10, zabbix-web 172.30.177.11)
+ZABBIX_SERVER=172.30.177.10
+ZABBIX_PORT=10051
+ZABBIX_HOST_PREFIX=lab-
+ZABBIX_LIVE=1
+ZABBIX_API_URL=http://172.30.177.11:8080/api_jsonrpc.php
+ZABBIX_API_TOKEN_FILE=/etc/flux-loadtest/zabbix_api.token
+CONF
+}
+
+# Configuracao gerada por versao anterior do lab.sh: acrescenta o bloco do Zabbix
+migrate_conf() {
+    [[ -f ${OUT_DIR}/loadtest.conf ]] || return 0
+    if ! grep -q '^ZABBIX_SERVER=' "${OUT_DIR}/loadtest.conf"; then
+        zabbix_conf >> "${OUT_DIR}/loadtest.conf"
+        log "bloco do Zabbix acrescentado a ${OUT_DIR}/loadtest.conf"
+    fi
+}
+
 wait_cluster() {
-    local i size=""
-    log "aguardando o Percona XtraDB Cluster formar (2 nos)"
+    local i size="" state=""
+    log "aguardando o Percona XtraDB Cluster formar (2 nos, Synced)"
     for ((i = 0; i < 240; i++)); do
-        size=$("${COMPOSE[@]}" exec -T banco-master-sbc-stfc \
+        # tamanho 2 ja aparece durante o SST (doador em Donor/Desynced): espera os dois Synced
+        read -r size state < <("${COMPOSE[@]}" exec -T banco-slave-stfc \
             mysql --defaults-extra-file=/etc/mysql/flux-loadtest.cnf -N -B \
-            -e "SHOW GLOBAL STATUS LIKE 'wsrep_cluster_size'" 2>/dev/null | awk '{ print $2 }') || true
-        if [[ ${size} == 2 ]]; then
-            log "cluster com 2 nos"
+            -e "SHOW GLOBAL STATUS WHERE Variable_name IN ('wsrep_cluster_size','wsrep_local_state_comment')" 2>/dev/null \
+            | awk '{ v[$1] = $2 } END { print v["wsrep_cluster_size"], v["wsrep_local_state_comment"] }') || true
+        if [[ ${size} == 2 && ${state} == Synced ]]; then
+            log "cluster com 2 nos, banco-slave-stfc Synced"
             return 0
         fi
         sleep 2
     done
-    warn "cluster nao chegou a 2 nos em 8 min (tamanho atual: ${size:-?}); veja: $0 status"
+    warn "cluster nao ficou pronto em 8 min (tamanho ${size:-?}, estado ${state:-?}); veja: $0 status"
 }
 
 cmd_up() {
@@ -170,7 +220,13 @@ cmd_up() {
     log "construindo e subindo (a primeira vez baixa pacotes e leva alguns minutos)"
     "${COMPOSE[@]}" up -d --build
     wait_cluster
-    [[ -f ${OUT_DIR}/loadtest.conf ]] || cmd_conf
+    if [[ -f ${OUT_DIR}/loadtest.conf ]]; then
+        migrate_conf
+        write_secrets
+    else
+        cmd_conf
+    fi
+    cmd_zabbix || warn "configuracao do Zabbix falhou; repita com: $0 zabbix"
     cmd_status
     cat <<EOF
 
@@ -179,6 +235,31 @@ Proximos passos:
   $0 shell
   cd /opt/flux-loadtest
   ./flux-loadtest.sh check -c /etc/flux-loadtest/loadtest.conf
+EOF
+}
+
+cmd_zabbix() {
+    require_docker
+    [[ -f ${OUT_DIR}/loadtest.conf ]] || die "configuracao ausente; rode '$0 up'"
+    migrate_conf
+    write_secrets
+    log "Zabbix: senha do Admin, token de API, templates e hosts"
+    "${COMPOSE[@]}" exec -T vm-teste python3 /opt/flux-loadtest/lib/flux_zabbix.py bootstrap \
+        --api-url http://172.30.177.11:8080/api_jsonrpc.php \
+        --new-password-file /etc/flux-loadtest/zabbix_admin.pass \
+        --token-file /etc/flux-loadtest/zabbix_api.token
+    "${COMPOSE[@]}" exec -T vm-teste /opt/flux-loadtest/flux-loadtest.sh zabbix setup --import-template \
+        -c /etc/flux-loadtest/loadtest.conf
+}
+
+cmd_urls() {
+    cat <<EOF
+
+Acesso pelo macOS (somente 127.0.0.1):
+  Interface web (nginx + PHP-FPM)  https://127.0.0.1:$(port LAB_PORT_WEB_HTTPS 8443)/   http://127.0.0.1:$(port LAB_PORT_WEB_HTTP 8081)/
+  Zabbix                           http://127.0.0.1:$(port LAB_PORT_ZABBIX_WEB 8080)/   usuario Admin, senha em ${OUT_DIR#"${LAB_DIR}/"}/zabbix_admin.pass
+  Zabbix trapper                   127.0.0.1:$(port LAB_PORT_ZABBIX_TRAPPER 10051)
+  SSH (usuarios loadtest/admin)    sbc-stfc-1 :$(port LAB_PORT_SSH_SBC1 22163)  sbc-stfc-02 :$(port LAB_PORT_SSH_SBC2 22162)  banco-master :$(port LAB_PORT_SSH_DB1 22161)  banco-slave :$(port LAB_PORT_SSH_DB2 22164)  interfaceweb :$(port LAB_PORT_SSH_WEB 22165)
 EOF
 }
 
@@ -192,6 +273,11 @@ cmd_status() {
             "mysql --defaults-extra-file=/etc/mysql/flux-loadtest.cnf -N -B -e \"SHOW GLOBAL STATUS WHERE Variable_name IN ('wsrep_cluster_size','wsrep_cluster_status','wsrep_local_state_comment')\" 2>/dev/null | sed 's/^/  /'; printf '  sessoes em flux.ci_sessions: '; mysql -u labcheck -N -B -e 'SELECT COUNT(*) FROM flux.ci_sessions' 2>/dev/null || echo '?'; ip -o -4 addr show | grep -q ' 172.30.4.100/' && echo '  VIP 172.30.4.100: neste no' || echo '  VIP 172.30.4.100: em outro no'" \
             || warn "${node} indisponivel"
     done
+    printf '\nZabbix: '
+    "${COMPOSE[@]}" exec -T vm-teste /opt/flux-loadtest/flux-loadtest.sh zabbix check \
+        -c /etc/flux-loadtest/loadtest.conf 2>&1 | sed 's/^\[[0-9:]*\] zabbix: //' | paste -sd ';' - \
+        || warn "zabbix check falhou"
+    cmd_urls
 }
 
 cmd_net() {
@@ -220,9 +306,19 @@ main() {
         conf)            cmd_conf "$@" ;;
         status)          cmd_status ;;
         keys)            cmd_keys ;;
+        zabbix)          cmd_zabbix ;;
         shell)           require_docker; exec "${COMPOSE[@]}" exec vm-teste bash ;;
         interna|externa) cmd_net "${action}" ;;
-        down)            require_docker; "${COMPOSE[@]}" down --remove-orphans ;;
+        down)
+            require_docker
+            if [[ ${1:-} == --zabbix ]]; then
+                "${COMPOSE[@]}" down --remove-orphans --volumes
+            elif [[ -z ${1:-} ]]; then
+                "${COMPOSE[@]}" down --remove-orphans
+            else
+                die "opcao invalida para down: $1"
+            fi
+            ;;
         ""|-h|--help)    usage ;;
         *)               usage >&2; die "acao invalida: ${action}" ;;
     esac

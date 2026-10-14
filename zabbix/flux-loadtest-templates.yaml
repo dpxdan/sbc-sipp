@@ -1,0 +1,3586 @@
+zabbix_export:
+  version: '7.4'
+  template_groups:
+    - uuid: 93f8f439d8444a1c89383a7bfd007f8e
+      name: 'Templates/Flux Loadtest'
+  templates:
+    - uuid: 724b2efd682c40f6bdacdf7d5ed84ec2
+      template: 'Flux Loadtest - Sistema'
+      name: 'Flux Loadtest - Sistema'
+      description: 'Metricas de sistema do coletor do flux-loadtest (metrics/<id>.csv), enviadas por trapper na chave flt.sys. Vincular a todos os hosts do teste.'
+      groups:
+        - name: 'Templates/Flux Loadtest'
+      items:
+      - uuid: c4842d21f5b948549e6664dae280832d
+        name: 'Amostra de sistema (JSON)'
+        type: TRAP
+        key: 'flt.sys'
+        delay: '0'
+        history: '0'
+        trends: '0'
+        value_type: TEXT
+        description: 'Trapper: JSON de uma amostra, enviado pelo flux-loadtest.'
+        tags:
+          - tag: 'component'
+            value: 'raw'
+      - uuid: 856a792044bd4f7698c70c895e5584cc
+        name: 'CPU total'
+        type: DEPENDENT
+        key: 'flt.sys[cpu_pct]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.cpu_pct'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sys'
+        tags:
+          - tag: 'component'
+            value: 'sistema'
+        triggers:
+          - uuid: 2dde91bf8baa410394de7891d3ce007e
+            expression: 'min(/Flux Loadtest - Sistema/flt.sys[cpu_pct],#3)>{$FLT.CPU.MAX}'
+            recovery_mode: RECOVERY_EXPRESSION
+            recovery_expression: 'max(/Flux Loadtest - Sistema/flt.sys[cpu_pct],#3)<={$FLT.CPU.MAX} or nodata(/Flux Loadtest - Sistema/flt.sys[cpu_pct],{$FLT.NODATA})=1'
+            name: 'CPU acima de {$FLT.CPU.MAX}% por 3 amostras em {HOST.NAME}'
+            opdata: '{ITEM.LASTVALUE1}'
+            priority: HIGH
+            manual_close: 'YES'
+            tags:
+              - tag: 'scope'
+                value: 'loadtest'
+      - uuid: bc5d77068b5c493e9f0d097c3d81e838
+        name: 'CPU do nucleo mais carregado'
+        type: DEPENDENT
+        key: 'flt.sys[cpu_max_core_pct]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.cpu_max_core_pct'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sys'
+        tags:
+          - tag: 'component'
+            value: 'sistema'
+      - uuid: 6ff54dab93bd4bddb6f17a1e7c521287
+        name: 'Nucleo mais carregado'
+        type: DEPENDENT
+        key: 'flt.sys[cpu_max_core]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.cpu_max_core'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sys'
+        tags:
+          - tag: 'component'
+            value: 'sistema'
+      - uuid: 0b2106e86ada4a58bfef6747c0d01135
+        name: 'CPU iowait'
+        type: DEPENDENT
+        key: 'flt.sys[iowait_pct]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.iowait_pct'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sys'
+        tags:
+          - tag: 'component'
+            value: 'sistema'
+      - uuid: fd23d728b4b1473a9016ffbb0b071d05
+        name: 'CPU steal'
+        type: DEPENDENT
+        key: 'flt.sys[steal_pct]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.steal_pct'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sys'
+        tags:
+          - tag: 'component'
+            value: 'sistema'
+      - uuid: 1e57fee27bd646248cd49c6a716c1f41
+        name: 'CPU softirq'
+        type: DEPENDENT
+        key: 'flt.sys[softirq_pct]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.softirq_pct'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sys'
+        tags:
+          - tag: 'component'
+            value: 'sistema'
+      - uuid: c8ec459a53ac41a7a68f5490fd136089
+        name: 'Load average (1 min)'
+        type: DEPENDENT
+        key: 'flt.sys[load1]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.load1'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sys'
+        tags:
+          - tag: 'component'
+            value: 'sistema'
+      - uuid: 116ae839c675497a8b2b04cc39dc7762
+        name: 'Memoria usada'
+        type: DEPENDENT
+        key: 'flt.sys[mem_used_pct]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.mem_used_pct'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sys'
+        tags:
+          - tag: 'component'
+            value: 'sistema'
+        triggers:
+          - uuid: 938a6944dbc940c6a83ae3c92b26265e
+            expression: 'min(/Flux Loadtest - Sistema/flt.sys[mem_used_pct],#3)>{$FLT.MEM.MAX}'
+            recovery_mode: RECOVERY_EXPRESSION
+            recovery_expression: 'max(/Flux Loadtest - Sistema/flt.sys[mem_used_pct],#3)<={$FLT.MEM.MAX} or nodata(/Flux Loadtest - Sistema/flt.sys[mem_used_pct],{$FLT.NODATA})=1'
+            name: 'Memoria acima de {$FLT.MEM.MAX}% por 3 amostras em {HOST.NAME}'
+            opdata: '{ITEM.LASTVALUE1}'
+            priority: HIGH
+            manual_close: 'YES'
+            tags:
+              - tag: 'scope'
+                value: 'loadtest'
+      - uuid: 70336ad4914f44a1b9635d65d2651fc9
+        name: 'Memoria disponivel'
+        type: DEPENDENT
+        key: 'flt.sys[mem_avail_mb]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'B'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.mem_avail_mb'
+            error_handler: DISCARD_VALUE
+          - type: MULTIPLIER
+            parameters:
+              - '1048576'
+        master_item:
+          key: 'flt.sys'
+        tags:
+          - tag: 'component'
+            value: 'sistema'
+      - uuid: e58ed2e859034ab1a1acf617f324f3c6
+        name: 'Swap usada'
+        type: DEPENDENT
+        key: 'flt.sys[swap_used_mb]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'B'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.swap_used_mb'
+            error_handler: DISCARD_VALUE
+          - type: MULTIPLIER
+            parameters:
+              - '1048576'
+        master_item:
+          key: 'flt.sys'
+        tags:
+          - tag: 'component'
+            value: 'sistema'
+      - uuid: 1d734b319f6a4066ad05ce17865ffb3c
+        name: 'Rede recebida'
+        type: DEPENDENT
+        key: 'flt.sys[net_rx_mbps]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'bps'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.net_rx_mbps'
+            error_handler: DISCARD_VALUE
+          - type: MULTIPLIER
+            parameters:
+              - '1000000'
+        master_item:
+          key: 'flt.sys'
+        tags:
+          - tag: 'component'
+            value: 'sistema'
+      - uuid: a2dc5f933db74c25bf3f48051e360d8b
+        name: 'Rede enviada'
+        type: DEPENDENT
+        key: 'flt.sys[net_tx_mbps]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'bps'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.net_tx_mbps'
+            error_handler: DISCARD_VALUE
+          - type: MULTIPLIER
+            parameters:
+              - '1000000'
+        master_item:
+          key: 'flt.sys'
+        tags:
+          - tag: 'component'
+            value: 'sistema'
+      - uuid: 6fc506fcfd904524b2a668ca0c42a4e3
+        name: 'Pacotes recebidos'
+        type: DEPENDENT
+        key: 'flt.sys[net_rx_pps]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'pps'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.net_rx_pps'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sys'
+        tags:
+          - tag: 'component'
+            value: 'sistema'
+      - uuid: f90335fc3f8440f8a0fedbf89aa2244f
+        name: 'Pacotes enviados'
+        type: DEPENDENT
+        key: 'flt.sys[net_tx_pps]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'pps'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.net_tx_pps'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sys'
+        tags:
+          - tag: 'component'
+            value: 'sistema'
+      - uuid: a3e8b6d9a5fa4a3083834c68767ec3d0
+        name: 'Erros de entrada UDP'
+        type: DEPENDENT
+        key: 'flt.sys[udp_in_err_s]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '/s'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.udp_in_err_s'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sys'
+        tags:
+          - tag: 'component'
+            value: 'sistema'
+      - uuid: fe6a3458605c41daae2ffa718bb1193a
+        name: 'Erros de buffer de recepcao UDP'
+        type: DEPENDENT
+        key: 'flt.sys[udp_rcvbuf_err_s]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '/s'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.udp_rcvbuf_err_s'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sys'
+        tags:
+          - tag: 'component'
+            value: 'sistema'
+        triggers:
+          - uuid: d61e97a8e1764a0f93f606e7c6e8c77d
+            expression: 'min(/Flux Loadtest - Sistema/flt.sys[udp_rcvbuf_err_s],#3)>0'
+            recovery_mode: RECOVERY_EXPRESSION
+            recovery_expression: 'max(/Flux Loadtest - Sistema/flt.sys[udp_rcvbuf_err_s],#3)<=0 or nodata(/Flux Loadtest - Sistema/flt.sys[udp_rcvbuf_err_s],{$FLT.NODATA})=1'
+            name: 'Descarte de UDP por buffer de recepcao cheio em {HOST.NAME}'
+            opdata: '{ITEM.LASTVALUE1}'
+            priority: WARNING
+            description: 'net.core.rmem_max/rmem_default insuficientes para o volume SIP/RTP.'
+            manual_close: 'YES'
+            tags:
+              - tag: 'scope'
+                value: 'loadtest'
+      - uuid: e340fb80d3dd4e19b7685303f8fddbbd
+        name: 'Disco leitura'
+        type: DEPENDENT
+        key: 'flt.sys[disk_rd_kbs]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'Bps'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.disk_rd_kbs'
+            error_handler: DISCARD_VALUE
+          - type: MULTIPLIER
+            parameters:
+              - '1024'
+        master_item:
+          key: 'flt.sys'
+        tags:
+          - tag: 'component'
+            value: 'sistema'
+      - uuid: 469e898328194b76bd90d286c53fbeef
+        name: 'Disco escrita'
+        type: DEPENDENT
+        key: 'flt.sys[disk_wr_kbs]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'Bps'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.disk_wr_kbs'
+            error_handler: DISCARD_VALUE
+          - type: MULTIPLIER
+            parameters:
+              - '1024'
+        master_item:
+          key: 'flt.sys'
+        tags:
+          - tag: 'component'
+            value: 'sistema'
+      - uuid: cb02ac40bb39406ebeacdeedf6362cd7
+        name: 'Disco ocupado'
+        type: DEPENDENT
+        key: 'flt.sys[disk_busy_pct]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.disk_busy_pct'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sys'
+        tags:
+          - tag: 'component'
+            value: 'sistema'
+      - uuid: 9fbde2c5960041d287f37dda5b3ddf66
+        name: 'Disco livre (particao vigiada)'
+        type: DEPENDENT
+        key: 'flt.sys[disk_free_pct]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.disk_free_pct'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sys'
+        tags:
+          - tag: 'component'
+            value: 'sistema'
+        triggers:
+          - uuid: 3dc3fc77581f4fa9a21fa0ae025aaced
+            expression: 'max(/Flux Loadtest - Sistema/flt.sys[disk_free_pct],#3)<{$FLT.DISK.FREE.MIN}'
+            recovery_mode: RECOVERY_EXPRESSION
+            recovery_expression: 'min(/Flux Loadtest - Sistema/flt.sys[disk_free_pct],#3)>={$FLT.DISK.FREE.MIN} or nodata(/Flux Loadtest - Sistema/flt.sys[disk_free_pct],{$FLT.NODATA})=1'
+            name: 'Disco livre abaixo de {$FLT.DISK.FREE.MIN}% em {HOST.NAME}'
+            opdata: '{ITEM.LASTVALUE1}'
+            priority: HIGH
+            manual_close: 'YES'
+            tags:
+              - tag: 'scope'
+                value: 'loadtest'
+      macros:
+        - macro: '{$FLT.CPU.MAX}'
+          value: '85'
+          description: 'GUARD_MAX_CPU_PCT (no gerador: GUARD_MAX_GEN_CPU_PCT)'
+        - macro: '{$FLT.MEM.MAX}'
+          value: '90'
+          description: 'GUARD_MAX_MEM_PCT'
+        - macro: '{$FLT.DISK.FREE.MIN}'
+          value: '15'
+          description: 'GUARD_MIN_DISK_FREE_PCT'
+        - macro: '{$FLT.NODATA}'
+          value: '5m'
+          description: 'Sem dados por este tempo = fim do teste (recupera os problemas)'
+    - uuid: cdfa01d7e03e4a9992554eb8f4295a66
+      template: 'Flux Loadtest - FreeSWITCH'
+      name: 'Flux Loadtest - FreeSWITCH'
+      description: 'FreeSWITCH no flux-loadtest (fs_cli status/show calls count). Chave flt.app.'
+      groups:
+        - name: 'Templates/Flux Loadtest'
+      items:
+      - uuid: 7df8226c33e3422e86a3ec03f8492609
+        name: 'Amostra do servico (JSON)'
+        type: TRAP
+        key: 'flt.app'
+        delay: '0'
+        history: '0'
+        trends: '0'
+        value_type: TEXT
+        description: 'Trapper: JSON de uma amostra, enviado pelo flux-loadtest.'
+        tags:
+          - tag: 'component'
+            value: 'raw'
+      - uuid: 8ddbb2811c3749e79e21271e39843939
+        name: 'FreeSWITCH: CPU (100 = 1 nucleo)'
+        type: DEPENDENT
+        key: 'flt.app[freeswitch_cpu_pct]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.freeswitch_cpu_pct'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'freeswitch'
+      - uuid: ccc59a61d70e4878a69bc9c1fe6ff9e0
+        name: 'FreeSWITCH: memoria RSS'
+        type: DEPENDENT
+        key: 'flt.app[freeswitch_rss_mb]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'B'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.freeswitch_rss_mb'
+            error_handler: DISCARD_VALUE
+          - type: MULTIPLIER
+            parameters:
+              - '1048576'
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'freeswitch'
+      - uuid: 9d9da8083afe490b8f6d645fd41ad65a
+        name: 'FreeSWITCH: threads'
+        type: DEPENDENT
+        key: 'flt.app[freeswitch_threads]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.freeswitch_threads'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'freeswitch'
+      - uuid: 4e5792727d564dd5857c9969a32b48a5
+        name: 'FreeSWITCH: chamadas'
+        type: DEPENDENT
+        key: 'flt.app[fs_calls]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.fs_calls'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'freeswitch'
+      - uuid: 206de8ff3cb342a2a986ad33f2019412
+        name: 'FreeSWITCH: sessoes'
+        type: DEPENDENT
+        key: 'flt.app[fs_sessions]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.fs_sessions'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'freeswitch'
+        triggers:
+          - uuid: 9ea8f2833f41477f9666c877fadedf06
+            expression: 'min(/Flux Loadtest - FreeSWITCH/flt.app[fs_sessions],#3)>{$FLT.FS.SESSIONS.MAX}'
+            recovery_mode: RECOVERY_EXPRESSION
+            recovery_expression: 'max(/Flux Loadtest - FreeSWITCH/flt.app[fs_sessions],#3)<={$FLT.FS.SESSIONS.MAX} or nodata(/Flux Loadtest - FreeSWITCH/flt.app[fs_sessions],{$FLT.NODATA})=1'
+            name: 'FreeSWITCH perto de max-sessions em {HOST.NAME}'
+            opdata: '{ITEM.LASTVALUE1}'
+            priority: WARNING
+            description: 'Ajuste {$FLT.FS.SESSIONS.MAX} para 90% do max-sessions do switch.conf.xml.'
+            manual_close: 'YES'
+            tags:
+              - tag: 'scope'
+                value: 'loadtest'
+      - uuid: b69063d1c6434450b8bcbd605f3aeadc
+        name: 'FreeSWITCH: sessoes por segundo'
+        type: DEPENDENT
+        key: 'flt.app[fs_sps]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.fs_sps'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'freeswitch'
+      - uuid: aba5c391a82547bc82cc4fe51dd5113c
+        name: 'FreeSWITCH: CPU ociosa (min idle cpu)'
+        type: DEPENDENT
+        key: 'flt.app[fs_idle_cpu]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.fs_idle_cpu'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'freeswitch'
+        triggers:
+          - uuid: 858ba2c6e95340fd98ee0b232118b65a
+            expression: 'max(/Flux Loadtest - FreeSWITCH/flt.app[fs_idle_cpu],#3)<{$FLT.FS.IDLE.MIN}'
+            recovery_mode: RECOVERY_EXPRESSION
+            recovery_expression: 'min(/Flux Loadtest - FreeSWITCH/flt.app[fs_idle_cpu],#3)>={$FLT.FS.IDLE.MIN} or nodata(/Flux Loadtest - FreeSWITCH/flt.app[fs_idle_cpu],{$FLT.NODATA})=1'
+            name: 'FreeSWITCH com CPU ociosa abaixo de {$FLT.FS.IDLE.MIN}% em {HOST.NAME}'
+            opdata: '{ITEM.LASTVALUE1}'
+            priority: HIGH
+            manual_close: 'YES'
+            tags:
+              - tag: 'scope'
+                value: 'loadtest'
+      macros:
+        - macro: '{$FLT.FS.IDLE.MIN}'
+          value: '10'
+          description: 'min idle cpu do FreeSWITCH'
+        - macro: '{$FLT.FS.SESSIONS.MAX}'
+          value: '900'
+          description: '90% de max-sessions (repositorio: 1000)'
+        - macro: '{$FLT.NODATA}'
+          value: '5m'
+          description: 'Sem dados por este tempo = fim do teste'
+    - uuid: 4bd6bf7e50124f19ae76b5fb9851ab61
+      template: 'Flux Loadtest - OpenSIPS'
+      name: 'Flux Loadtest - OpenSIPS'
+      description: 'OpenSIPS no flux-loadtest (MI get_statistics). Chave flt.app.'
+      groups:
+        - name: 'Templates/Flux Loadtest'
+      items:
+      - uuid: 598cd7047ab04a06aa44db50c841ee3e
+        name: 'Amostra do servico (JSON)'
+        type: TRAP
+        key: 'flt.app'
+        delay: '0'
+        history: '0'
+        trends: '0'
+        value_type: TEXT
+        description: 'Trapper: JSON de uma amostra, enviado pelo flux-loadtest.'
+        tags:
+          - tag: 'component'
+            value: 'raw'
+      - uuid: b1c77fce347b403bac5dca630657fbba
+        name: 'OpenSIPS: CPU (100 = 1 nucleo)'
+        type: DEPENDENT
+        key: 'flt.app[opensips_cpu_pct]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.opensips_cpu_pct'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'opensips'
+      - uuid: ecdef881d5d040c6805ec6aed06b7942
+        name: 'OpenSIPS: memoria RSS'
+        type: DEPENDENT
+        key: 'flt.app[opensips_rss_mb]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'B'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.opensips_rss_mb'
+            error_handler: DISCARD_VALUE
+          - type: MULTIPLIER
+            parameters:
+              - '1048576'
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'opensips'
+      - uuid: dc17605420904c008cfda3d37425b84b
+        name: 'OpenSIPS: threads'
+        type: DEPENDENT
+        key: 'flt.app[opensips_threads]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.opensips_threads'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'opensips'
+      - uuid: 1d7e07d1b89e47ec9874496100b20051
+        name: 'OpenSIPS: dialogos ativos'
+        type: DEPENDENT
+        key: 'flt.app[os_active_dlg]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.os_active_dlg'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'opensips'
+      - uuid: aee09b4b30fa443ea5414821ddb9a165
+        name: 'OpenSIPS: dialogos em early'
+        type: DEPENDENT
+        key: 'flt.app[os_early_dlg]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.os_early_dlg'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'opensips'
+      - uuid: 574126e56250444d82edcc843204aa90
+        name: 'OpenSIPS: transacoes em uso'
+        type: DEPENDENT
+        key: 'flt.app[os_tm_inuse]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.os_tm_inuse'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'opensips'
+      - uuid: 4215989e123e48ca84ec749f337242ed
+        name: 'OpenSIPS: requisicoes recebidas'
+        type: DEPENDENT
+        key: 'flt.app[os_rcv_req_s]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '/s'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.os_rcv_req_s'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'opensips'
+      - uuid: e5d60548b99e4ca4822f7d0f3cbdf8cc
+        name: 'OpenSIPS: dialogos com falha (acumulado)'
+        type: DEPENDENT
+        key: 'flt.app[os_failed_dlg_total]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.os_failed_dlg_total'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'opensips'
+      - uuid: 6fef05f67cf14efe9d7636a300a2330b
+        name: 'OpenSIPS: requisicoes descartadas (acumulado)'
+        type: DEPENDENT
+        key: 'flt.app[os_drop_req_total]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.os_drop_req_total'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'opensips'
+      - uuid: a8d18e05245448469032c1fa18366641
+        name: 'OpenSIPS: memoria compartilhada usada'
+        type: DEPENDENT
+        key: 'flt.app[os_shm_used_pct]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.os_shm_used_pct'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'opensips'
+        triggers:
+          - uuid: 6b80dfa09fc94957ade159678151af6b
+            expression: 'min(/Flux Loadtest - OpenSIPS/flt.app[os_shm_used_pct],#3)>{$FLT.OS.SHM.MAX}'
+            recovery_mode: RECOVERY_EXPRESSION
+            recovery_expression: 'max(/Flux Loadtest - OpenSIPS/flt.app[os_shm_used_pct],#3)<={$FLT.OS.SHM.MAX} or nodata(/Flux Loadtest - OpenSIPS/flt.app[os_shm_used_pct],{$FLT.NODATA})=1'
+            name: 'OpenSIPS com memoria compartilhada acima de {$FLT.OS.SHM.MAX}% em {HOST.NAME}'
+            opdata: '{ITEM.LASTVALUE1}'
+            priority: HIGH
+            manual_close: 'YES'
+            tags:
+              - tag: 'scope'
+                value: 'loadtest'
+      - uuid: 45195f4f307f40d7b76293a61bcdafcd
+        name: 'OpenSIPS: load'
+        type: DEPENDENT
+        key: 'flt.app[os_load]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.os_load'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'opensips'
+      macros:
+        - macro: '{$FLT.OS.SHM.MAX}'
+          value: '80'
+          description: 'shmem:real_used_size / total_size'
+        - macro: '{$FLT.NODATA}'
+          value: '5m'
+          description: 'Sem dados por este tempo = fim do teste'
+    - uuid: 1f8ab3acb248465a8fb854cc76dd9e63
+      template: 'Flux Loadtest - MySQL PXC'
+      name: 'Flux Loadtest - MySQL PXC'
+      description: 'MySQL / Percona XtraDB Cluster no flux-loadtest (SHOW GLOBAL STATUS). Chave flt.app.'
+      groups:
+        - name: 'Templates/Flux Loadtest'
+      items:
+      - uuid: 871b511f2cba4619b9d427572eb42f56
+        name: 'Amostra do servico (JSON)'
+        type: TRAP
+        key: 'flt.app'
+        delay: '0'
+        history: '0'
+        trends: '0'
+        value_type: TEXT
+        description: 'Trapper: JSON de uma amostra, enviado pelo flux-loadtest.'
+        tags:
+          - tag: 'component'
+            value: 'raw'
+      - uuid: bf26285db9f340478ff7c14cbe8a3362
+        name: 'MySQL: CPU (100 = 1 nucleo)'
+        type: DEPENDENT
+        key: 'flt.app[mysqld_cpu_pct]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.mysqld_cpu_pct'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: 494fc048e63b43c2a504d461de6a9257
+        name: 'MySQL: memoria RSS'
+        type: DEPENDENT
+        key: 'flt.app[mysqld_rss_mb]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'B'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.mysqld_rss_mb'
+            error_handler: DISCARD_VALUE
+          - type: MULTIPLIER
+            parameters:
+              - '1048576'
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: 3defb3505fe84ea69635ac80bebc1797
+        name: 'MySQL: threads'
+        type: DEPENDENT
+        key: 'flt.app[mysqld_threads]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.mysqld_threads'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: eb1583f736584ac7b0e37b976f54e911
+        name: 'MySQL: consultas'
+        type: DEPENDENT
+        key: 'flt.app[db_qps]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'qps'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.db_qps'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: f95494f432da4746bd0bce8ac52a5d13
+        name: 'MySQL: SELECT'
+        type: DEPENDENT
+        key: 'flt.app[db_select_s]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '/s'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.db_select_s'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: d9ef452eaa3b43dd9b652d44b70b59db
+        name: 'MySQL: INSERT'
+        type: DEPENDENT
+        key: 'flt.app[db_insert_s]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '/s'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.db_insert_s'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: 726eaa8650734e3ea045d85187ff897f
+        name: 'MySQL: UPDATE'
+        type: DEPENDENT
+        key: 'flt.app[db_update_s]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '/s'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.db_update_s'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: 16688ff440e54cdaa801848f97ce68dc
+        name: 'MySQL: threads em execucao'
+        type: DEPENDENT
+        key: 'flt.app[db_threads_running]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.db_threads_running'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: 90266d7039074694a7353991074a60fc
+        name: 'MySQL: conexoes'
+        type: DEPENDENT
+        key: 'flt.app[db_threads_connected]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.db_threads_connected'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: c581b799af5d4066a82382a26488ce3f
+        name: 'MySQL: consultas lentas (acumulado)'
+        type: DEPENDENT
+        key: 'flt.app[db_slow_total]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.db_slow_total'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: a3f81840a1ee42ea827436bd2c7d3f6b
+        name: 'MySQL: esperas de lock de linha (acumulado)'
+        type: DEPENDENT
+        key: 'flt.app[db_row_lock_waits_total]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.db_row_lock_waits_total'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: fb8b22d53bf745c7825bfc9b9271a93b
+        name: 'MySQL: atraso da replica assincrona (-1 = sem replica)'
+        type: DEPENDENT
+        key: 'flt.app[db_repl_lag]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 's'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.db_repl_lag'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: 895737ce4fb84dfe9c441e12fc42781c
+        name: 'MySQL: replica assincrona ativa (-1 = sem replica)'
+        type: DEPENDENT
+        key: 'flt.app[db_repl_ok]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        valuemap:
+          name: 'Flux Loadtest - replica'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.db_repl_ok'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: 33eae3f2d8ca4306bf3b900910dcdff4
+        name: 'PXC: fila de recepcao'
+        type: DEPENDENT
+        key: 'flt.app[db_wsrep_recv_queue]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.db_wsrep_recv_queue'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: 045df957e3194da6a13fa0fbc9ad9f60
+        name: 'PXC: fila de envio'
+        type: DEPENDENT
+        key: 'flt.app[db_wsrep_send_queue]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.db_wsrep_send_queue'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: cae05087b542439594b569a157a2376e
+        name: 'PXC: replicacao pausada por flow control'
+        type: DEPENDENT
+        key: 'flt.app[db_wsrep_fc_paused_pct]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.db_wsrep_fc_paused_pct'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+        triggers:
+          - uuid: ebfb2d0bc3f9443fa68400f8b29187ea
+            expression: 'min(/Flux Loadtest - MySQL PXC/flt.app[db_wsrep_fc_paused_pct],#3)>{$FLT.WSREP.FC.MAX}'
+            recovery_mode: RECOVERY_EXPRESSION
+            recovery_expression: 'max(/Flux Loadtest - MySQL PXC/flt.app[db_wsrep_fc_paused_pct],#3)<={$FLT.WSREP.FC.MAX} or nodata(/Flux Loadtest - MySQL PXC/flt.app[db_wsrep_fc_paused_pct],{$FLT.NODATA})=1'
+            name: 'PXC pausado por flow control acima de {$FLT.WSREP.FC.MAX}% em {HOST.NAME}'
+            opdata: '{ITEM.LASTVALUE1}'
+            priority: HIGH
+            manual_close: 'YES'
+            tags:
+              - tag: 'scope'
+                value: 'loadtest'
+      - uuid: 6de7050a8f6a4b339851f6de2cae24a7
+        name: 'PXC: nos no cluster'
+        type: DEPENDENT
+        key: 'flt.app[db_wsrep_cluster_size]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.db_wsrep_cluster_size'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+        triggers:
+          - uuid: e8b41111bef6432bbec7ec5e0b0036f3
+            expression: 'max(/Flux Loadtest - MySQL PXC/flt.app[db_wsrep_cluster_size],#3)<{$FLT.WSREP.SIZE.MIN}'
+            recovery_mode: RECOVERY_EXPRESSION
+            recovery_expression: 'min(/Flux Loadtest - MySQL PXC/flt.app[db_wsrep_cluster_size],#3)>={$FLT.WSREP.SIZE.MIN} or nodata(/Flux Loadtest - MySQL PXC/flt.app[db_wsrep_cluster_size],{$FLT.NODATA})=1'
+            name: 'PXC com menos de {$FLT.WSREP.SIZE.MIN} nos em {HOST.NAME}'
+            opdata: '{ITEM.LASTVALUE1}'
+            priority: HIGH
+            manual_close: 'YES'
+            tags:
+              - tag: 'scope'
+                value: 'loadtest'
+      - uuid: e109de3ceeae4fbf8806555e65edbd22
+        name: 'PXC: estado do no'
+        type: DEPENDENT
+        key: 'flt.app[db_wsrep_state]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        valuemap:
+          name: 'Flux Loadtest - wsrep state'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.db_wsrep_state'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: 8b4927ca2aa44fdda0273985d9a6f287
+        name: 'PXC: componente Primary'
+        type: DEPENDENT
+        key: 'flt.app[db_wsrep_primary]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        valuemap:
+          name: 'Flux Loadtest - sim/nao'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.db_wsrep_primary'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+        triggers:
+          - uuid: baffd11d6b484fd3a4641a9f62fac5e4
+            expression: 'max(/Flux Loadtest - MySQL PXC/flt.app[db_wsrep_primary],#3)<1'
+            recovery_mode: RECOVERY_EXPRESSION
+            recovery_expression: 'min(/Flux Loadtest - MySQL PXC/flt.app[db_wsrep_primary],#3)>=1 or nodata(/Flux Loadtest - MySQL PXC/flt.app[db_wsrep_primary],{$FLT.NODATA})=1'
+            name: 'PXC fora do componente Primary em {HOST.NAME}'
+            opdata: '{ITEM.LASTVALUE1}'
+            priority: DISASTER
+            manual_close: 'YES'
+            tags:
+              - tag: 'scope'
+                value: 'loadtest'
+      - uuid: c22825c22ffd43588dca49342eb2da2c
+        name: 'PXC: VIP do keepalived neste no'
+        type: DEPENDENT
+        key: 'flt.app[db_vip]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        valuemap:
+          name: 'Flux Loadtest - sim/nao'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.db_vip'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      macros:
+        - macro: '{$FLT.WSREP.SIZE.MIN}'
+          value: '2'
+          description: 'GUARD_MIN_WSREP_CLUSTER_SIZE'
+        - macro: '{$FLT.WSREP.FC.MAX}'
+          value: '10'
+          description: 'GUARD_MAX_WSREP_FC_PCT'
+        - macro: '{$FLT.NODATA}'
+          value: '5m'
+          description: 'Sem dados por este tempo = fim do teste'
+      valuemaps:
+        - uuid: d8c84879b545400fb7dc4c195992988f
+          name: 'Flux Loadtest - wsrep state'
+          mappings:
+            - value: '1'
+              newvalue: 'Joining'
+            - value: '2'
+              newvalue: 'Donor/Desynced'
+            - value: '3'
+              newvalue: 'Joined'
+            - value: '4'
+              newvalue: 'Synced'
+        - uuid: f5bfe7ce31d144d0a7ab9290b4ac910e
+          name: 'Flux Loadtest - sim/nao'
+          mappings:
+            - value: '0'
+              newvalue: 'nao'
+            - value: '1'
+              newvalue: 'sim'
+        - uuid: 127d6833098f4d0d8b613512adfc8c15
+          name: 'Flux Loadtest - replica'
+          mappings:
+            - value: '-1'
+              newvalue: 'sem replica'
+            - value: '0'
+              newvalue: 'parada'
+            - value: '1'
+              newvalue: 'ativa'
+    - uuid: baa5c28ab474469397391b29ae164008
+      template: 'Flux Loadtest - Web'
+      name: 'Flux Loadtest - Web'
+      description: 'nginx + PHP-FPM no flux-loadtest (stub_status e fpm-status). Chave flt.app.'
+      groups:
+        - name: 'Templates/Flux Loadtest'
+      items:
+      - uuid: a19de27f9b9f4f6fbc18799b32bb0e5f
+        name: 'Amostra do servico (JSON)'
+        type: TRAP
+        key: 'flt.app'
+        delay: '0'
+        history: '0'
+        trends: '0'
+        value_type: TEXT
+        description: 'Trapper: JSON de uma amostra, enviado pelo flux-loadtest.'
+        tags:
+          - tag: 'component'
+            value: 'raw'
+      - uuid: 0e8b82e0f72d4764a5d65115dd40deec
+        name: 'nginx: CPU (100 = 1 nucleo)'
+        type: DEPENDENT
+        key: 'flt.app[nginx_cpu_pct]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.nginx_cpu_pct'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: ddc31dd586914cd095dabf342110ec88
+        name: 'nginx: memoria RSS'
+        type: DEPENDENT
+        key: 'flt.app[nginx_rss_mb]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'B'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.nginx_rss_mb'
+            error_handler: DISCARD_VALUE
+          - type: MULTIPLIER
+            parameters:
+              - '1048576'
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 4fb87de3303d490fb637bae53f7b92ce
+        name: 'nginx: threads'
+        type: DEPENDENT
+        key: 'flt.app[nginx_threads]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.nginx_threads'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: c99c060e74044913997a894b447be8f0
+        name: 'PHP-FPM: CPU (100 = 1 nucleo)'
+        type: DEPENDENT
+        key: 'flt.app[php_fpm_cpu_pct]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.php_fpm_cpu_pct'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: b5b4c6a8f4764729be0d780dc49bc7a7
+        name: 'PHP-FPM: memoria RSS'
+        type: DEPENDENT
+        key: 'flt.app[php_fpm_rss_mb]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'B'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.php_fpm_rss_mb'
+            error_handler: DISCARD_VALUE
+          - type: MULTIPLIER
+            parameters:
+              - '1048576'
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 4d27871f45ed4617b59090e1750fe78b
+        name: 'PHP-FPM: threads'
+        type: DEPENDENT
+        key: 'flt.app[php_fpm_threads]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.php_fpm_threads'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 386fb83c504e4c528a5658cca0b65bfb
+        name: 'nginx: conexoes ativas'
+        type: DEPENDENT
+        key: 'flt.app[ngx_active]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.ngx_active'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: b2e421b8cea54a9a9f4abf01751a4a0a
+        name: 'nginx: requisicoes'
+        type: DEPENDENT
+        key: 'flt.app[ngx_rps]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'rps'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.ngx_rps'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: f04a3a1060bd4c9f9b5d69e727f9e4cf
+        name: 'nginx: conexoes escrevendo'
+        type: DEPENDENT
+        key: 'flt.app[ngx_writing]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.ngx_writing'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 1247e8b4d577499e81233b2a40c6c539
+        name: 'nginx: conexoes em espera'
+        type: DEPENDENT
+        key: 'flt.app[ngx_waiting]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.ngx_waiting'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: ebade2bcf70d462cb9a1b1cb8558501f
+        name: 'PHP-FPM: processos ativos'
+        type: DEPENDENT
+        key: 'flt.app[fpm_active]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.fpm_active'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 290462edd8524df888213ea7ba9504f1
+        name: 'PHP-FPM: processos ociosos'
+        type: DEPENDENT
+        key: 'flt.app[fpm_idle]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.fpm_idle'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 9e849212a99045fd9f2e2d8108ec6b47
+        name: 'PHP-FPM: fila de conexoes'
+        type: DEPENDENT
+        key: 'flt.app[fpm_listen_queue]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.fpm_listen_queue'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'web'
+        triggers:
+          - uuid: bff2eea1be2147cf84a4bcc98da83e1f
+            expression: 'min(/Flux Loadtest - Web/flt.app[fpm_listen_queue],#3)>0'
+            recovery_mode: RECOVERY_EXPRESSION
+            recovery_expression: 'max(/Flux Loadtest - Web/flt.app[fpm_listen_queue],#3)<=0 or nodata(/Flux Loadtest - Web/flt.app[fpm_listen_queue],{$FLT.NODATA})=1'
+            name: 'PHP-FPM com fila de conexoes em {HOST.NAME}'
+            opdata: '{ITEM.LASTVALUE1}'
+            priority: WARNING
+            manual_close: 'YES'
+            tags:
+              - tag: 'scope'
+                value: 'loadtest'
+      - uuid: 0316f7bb54064e85af708d4e61387fc7
+        name: 'PHP-FPM: conexoes aceitas'
+        type: DEPENDENT
+        key: 'flt.app[fpm_rps]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'rps'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.fpm_rps'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: dff1551a5a0c4b7f886ebbe23eeae2a7
+        name: 'PHP-FPM: max children atingido (acumulado)'
+        type: DEPENDENT
+        key: 'flt.app[fpm_max_children_total]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.fpm_max_children_total'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 2c92fec8edad454d862da76c11f1d4ea
+        name: 'PHP-FPM: requisicoes lentas (acumulado)'
+        type: DEPENDENT
+        key: 'flt.app[fpm_slow_total]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.fpm_slow_total'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      macros:
+        - macro: '{$FLT.NODATA}'
+          value: '5m'
+          description: 'Sem dados por este tempo = fim do teste'
+    - uuid: 732c14379cdb4e48b1331e0e5e1d7b81
+      template: 'Flux Loadtest - Gerador'
+      name: 'Flux Loadtest - Gerador'
+      description: 'Processos da VM de teste (SIPp, wrk, sysbench). Chave flt.app. Defina {$FLT.CPU.MAX} = GUARD_MAX_GEN_CPU_PCT no host (o setup do flux-loadtest faz isso).'
+      groups:
+        - name: 'Templates/Flux Loadtest'
+      items:
+      - uuid: 87fd4afa335a4750badf39074d704845
+        name: 'Amostra do servico (JSON)'
+        type: TRAP
+        key: 'flt.app'
+        delay: '0'
+        history: '0'
+        trends: '0'
+        value_type: TEXT
+        description: 'Trapper: JSON de uma amostra, enviado pelo flux-loadtest.'
+        tags:
+          - tag: 'component'
+            value: 'raw'
+      - uuid: 5df4d3f571954971a3c5a47861efe937
+        name: 'SIPp: CPU (100 = 1 nucleo)'
+        type: DEPENDENT
+        key: 'flt.app[sipp_cpu_pct]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.sipp_cpu_pct'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'gerador'
+      - uuid: b1fa787ec6c44280b4e54e5d30f6552c
+        name: 'SIPp: memoria RSS'
+        type: DEPENDENT
+        key: 'flt.app[sipp_rss_mb]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'B'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.sipp_rss_mb'
+            error_handler: DISCARD_VALUE
+          - type: MULTIPLIER
+            parameters:
+              - '1048576'
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'gerador'
+      - uuid: c20f59f679af471fab63b7eb7c7c3562
+        name: 'SIPp: threads'
+        type: DEPENDENT
+        key: 'flt.app[sipp_threads]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.sipp_threads'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'gerador'
+      - uuid: 6e9853a9d35c4448a351f52443907500
+        name: 'wrk: CPU (100 = 1 nucleo)'
+        type: DEPENDENT
+        key: 'flt.app[wrk_cpu_pct]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.wrk_cpu_pct'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'gerador'
+      - uuid: 313a54254c984231b1cfd77c6220ad57
+        name: 'wrk: memoria RSS'
+        type: DEPENDENT
+        key: 'flt.app[wrk_rss_mb]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'B'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.wrk_rss_mb'
+            error_handler: DISCARD_VALUE
+          - type: MULTIPLIER
+            parameters:
+              - '1048576'
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'gerador'
+      - uuid: df04b4c0de7f4ed6bb4e981dd7729c3f
+        name: 'wrk: threads'
+        type: DEPENDENT
+        key: 'flt.app[wrk_threads]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.wrk_threads'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'gerador'
+      - uuid: 4c0a216a5d50426486d6a0a2682a1ece
+        name: 'sysbench: CPU (100 = 1 nucleo)'
+        type: DEPENDENT
+        key: 'flt.app[sysbench_cpu_pct]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.sysbench_cpu_pct'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'gerador'
+      - uuid: 2000fd29bd0c4d27849031656ea1242d
+        name: 'sysbench: memoria RSS'
+        type: DEPENDENT
+        key: 'flt.app[sysbench_rss_mb]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'B'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.sysbench_rss_mb'
+            error_handler: DISCARD_VALUE
+          - type: MULTIPLIER
+            parameters:
+              - '1048576'
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'gerador'
+      - uuid: 060bea2f87414b7ca3da524cbcbc0e0e
+        name: 'sysbench: threads'
+        type: DEPENDENT
+        key: 'flt.app[sysbench_threads]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.sysbench_threads'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'gerador'
+    - uuid: 08c13538089540d599aa4479f48c3c54
+      template: 'Flux Loadtest - Execucao'
+      name: 'Flux Loadtest - Execucao'
+      description: 'Execucao do flux-loadtest (host <prefixo>run): parametros, fase, SIPp, wrk, sysbench, eventos do guard e resultado.'
+      groups:
+        - name: 'Templates/Flux Loadtest'
+      items:
+      - uuid: b132a592323e4a52ababb23ea03331df
+        name: 'Parametros da execucao (JSON do run.env)'
+        type: TRAP
+        key: 'flt.run.info'
+        delay: '0'
+        history: '0'
+        trends: '0'
+        value_type: TEXT
+        description: 'Trapper: JSON enviado pelo flux-loadtest.'
+        tags:
+          - tag: 'component'
+            value: 'raw'
+      - uuid: 4e5b1e55d391402d9691c702f18d46a4
+        name: 'Amostra do SIPp (JSON do stats.csv)'
+        type: TRAP
+        key: 'flt.sip'
+        delay: '0'
+        history: '0'
+        trends: '0'
+        value_type: TEXT
+        description: 'Trapper: JSON enviado pelo flux-loadtest.'
+        tags:
+          - tag: 'component'
+            value: 'raw'
+      - uuid: 56945f2c58424aad853cf82540d558e8
+        name: 'Resultado do wrk (JSON por alvo)'
+        type: TRAP
+        key: 'flt.web'
+        delay: '0'
+        history: '0'
+        trends: '0'
+        value_type: TEXT
+        description: 'Trapper: JSON enviado pelo flux-loadtest.'
+        tags:
+          - tag: 'component'
+            value: 'raw'
+      - uuid: 0cc25c6b17bf4d8797f0829b795183e0
+        name: 'sysbench (JSON por intervalo e resumo)'
+        type: TRAP
+        key: 'flt.mysql'
+        delay: '0'
+        history: '0'
+        trends: '0'
+        value_type: TEXT
+        description: 'Trapper: JSON enviado pelo flux-loadtest.'
+        tags:
+          - tag: 'component'
+            value: 'raw'
+      - uuid: 97e404a0a11446ac9298fe434702b84f
+        name: 'Resultado da execucao (JSON)'
+        type: TRAP
+        key: 'flt.result'
+        delay: '0'
+        history: '0'
+        trends: '0'
+        value_type: TEXT
+        description: 'Trapper: JSON enviado pelo flux-loadtest.'
+        tags:
+          - tag: 'component'
+            value: 'raw'
+      - uuid: ab65727c4c314b4b9ae4545ef4743b8c
+        name: 'Fase em andamento'
+        type: TRAP
+        key: 'flt.phase'
+        delay: '0'
+        history: 90d
+        trends: '0'
+        value_type: CHAR
+        description: 'Nome da fase no inicio e ''-'' no fim (baseline, sip, sip_drain, mysql, web_static, web_php, cooldown).'
+        tags:
+          - tag: 'component'
+            value: 'execucao'
+      - uuid: 4ebf08bc4a524903b6391f763245dc77
+        name: 'Eventos do guard'
+        type: TRAP
+        key: 'flt.guard'
+        delay: '0'
+        history: 90d
+        trends: '0'
+        value_type: TEXT
+        description: 'Linhas do guard.log: fase, metrica fora do limite e contagem.'
+        tags:
+          - tag: 'component'
+            value: 'execucao'
+      - uuid: 47bb727e686d48eabb8dc30e1a1d9c4a
+        name: 'Execucao: identificador'
+        type: DEPENDENT
+        key: 'flt.run[execucao]'
+        delay: '0'
+        history: 90d
+        trends: '0'
+        value_type: CHAR
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.execucao'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.run.info'
+        tags:
+          - tag: 'component'
+            value: 'run'
+      - uuid: 6b22f8278c3047bfb41aad9d09c59104
+        name: 'Execucao: rotulo'
+        type: DEPENDENT
+        key: 'flt.run[label]'
+        delay: '0'
+        history: 90d
+        trends: '0'
+        value_type: CHAR
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.label'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.run.info'
+        tags:
+          - tag: 'component'
+            value: 'run'
+      - uuid: d620c01d41594275b6ef9c11fa84877f
+        name: 'Execucao: testes'
+        type: DEPENDENT
+        key: 'flt.run[testes]'
+        delay: '0'
+        history: 90d
+        trends: '0'
+        value_type: CHAR
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.testes'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.run.info'
+        tags:
+          - tag: 'component'
+            value: 'run'
+      - uuid: 8efa14be215445a282b9f697114eb6d4
+        name: 'Execucao: destino SIP'
+        type: DEPENDENT
+        key: 'flt.run[sip_destino]'
+        delay: '0'
+        history: 90d
+        trends: '0'
+        value_type: CHAR
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.sip_destino'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.run.info'
+        tags:
+          - tag: 'component'
+            value: 'run'
+      - uuid: d5cba3c9c0614d48a6dda8fafe2c0711
+        name: 'Execucao: CPS e rampa'
+        type: DEPENDENT
+        key: 'flt.run[cps]'
+        delay: '0'
+        history: 90d
+        trends: '0'
+        value_type: CHAR
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.cps'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.run.info'
+        tags:
+          - tag: 'component'
+            value: 'run'
+      - uuid: 9c5fa8037c204796ba95ede9f776d9ae
+        name: 'Execucao: hold (s)'
+        type: DEPENDENT
+        key: 'flt.run[hold_s]'
+        delay: '0'
+        history: 90d
+        trends: '0'
+        value_type: CHAR
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.hold_s'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.run.info'
+        tags:
+          - tag: 'component'
+            value: 'run'
+      - uuid: 46196de3169647c6aff35b53971f3e67
+        name: 'Execucao: janela (s)'
+        type: DEPENDENT
+        key: 'flt.run[janela_s]'
+        delay: '0'
+        history: 90d
+        trends: '0'
+        value_type: CHAR
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.janela_s'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.run.info'
+        tags:
+          - tag: 'component'
+            value: 'run'
+      - uuid: d6cbea56e4e54aa7a996959ccfddb395
+        name: 'Execucao: midia'
+        type: DEPENDENT
+        key: 'flt.run[midia]'
+        delay: '0'
+        history: 90d
+        trends: '0'
+        value_type: CHAR
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.midia'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.run.info'
+        tags:
+          - tag: 'component'
+            value: 'run'
+      - uuid: affc0bb689544d7e857f98b4f259910a
+        name: 'Execucao: limite de simultaneas'
+        type: DEPENDENT
+        key: 'flt.run[limite_simultaneas]'
+        delay: '0'
+        history: 90d
+        trends: '0'
+        value_type: CHAR
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.limite_simultaneas'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.run.info'
+        tags:
+          - tag: 'component'
+            value: 'run'
+      - uuid: 80575e6098294602ade6635de50a8882
+        name: 'Execucao: DIDs'
+        type: DEPENDENT
+        key: 'flt.run[dids]'
+        delay: '0'
+        history: 90d
+        trends: '0'
+        value_type: CHAR
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.dids'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.run.info'
+        tags:
+          - tag: 'component'
+            value: 'run'
+      - uuid: a0177ebe875a4b1c857ede4e10021691
+        name: 'Execucao: VM de teste'
+        type: DEPENDENT
+        key: 'flt.run[vm_teste]'
+        delay: '0'
+        history: 90d
+        trends: '0'
+        value_type: CHAR
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.vm_teste'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.run.info'
+        tags:
+          - tag: 'component'
+            value: 'run'
+      - uuid: 7a74ed4f45a84cd38efc6fc8e2a428c8
+        name: 'SIPp: CPS alvo'
+        type: DEPENDENT
+        key: 'flt.sip[target_rate]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.target_rate'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sip'
+        tags:
+          - tag: 'component'
+            value: 'sip'
+      - uuid: 1febe6ca8129494b993445333d307737
+        name: 'SIPp: CPS no periodo'
+        type: DEPENDENT
+        key: 'flt.sip[call_rate]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.call_rate'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sip'
+        tags:
+          - tag: 'component'
+            value: 'sip'
+      - uuid: ccf3ad8edde24729be504aa3d340fb34
+        name: 'SIPp: chamadas simultaneas'
+        type: DEPENDENT
+        key: 'flt.sip[current_calls]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.current_calls'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sip'
+        tags:
+          - tag: 'component'
+            value: 'sip'
+      - uuid: ee6cd76a7be845c18caf76447161a567
+        name: 'SIPp: chamadas criadas (acumulado)'
+        type: DEPENDENT
+        key: 'flt.sip[total_created]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.total_created'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sip'
+        tags:
+          - tag: 'component'
+            value: 'sip'
+      - uuid: 433d2d7fb0934ddda2cf19048b3b296c
+        name: 'SIPp: sucesso no periodo'
+        type: DEPENDENT
+        key: 'flt.sip[success_p]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.success_p'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sip'
+        tags:
+          - tag: 'component'
+            value: 'sip'
+      - uuid: 70ae6c810055423db71d293167fdf871
+        name: 'SIPp: falhas no periodo'
+        type: DEPENDENT
+        key: 'flt.sip[failed_p]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.failed_p'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sip'
+        tags:
+          - tag: 'component'
+            value: 'sip'
+      - uuid: a2c1de65aab24b87bb3b4f745e4f374e
+        name: 'SIPp: falhas no periodo (% das encerradas)'
+        type: DEPENDENT
+        key: 'flt.sip[failed_pct_p]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.failed_pct_p'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sip'
+        tags:
+          - tag: 'component'
+            value: 'sip'
+        triggers:
+          - uuid: 6a4a1dd142d84706b30cd1f91bfa73c6
+            expression: 'min(/Flux Loadtest - Execucao/flt.sip[failed_pct_p],#3)>{$FLT.SIP.FAIL.MAX}'
+            recovery_mode: RECOVERY_EXPRESSION
+            recovery_expression: 'max(/Flux Loadtest - Execucao/flt.sip[failed_pct_p],#3)<={$FLT.SIP.FAIL.MAX} or nodata(/Flux Loadtest - Execucao/flt.sip[failed_pct_p],{$FLT.NODATA})=1'
+            name: 'Falhas SIP acima de {$FLT.SIP.FAIL.MAX}% por 3 periodos'
+            opdata: '{ITEM.LASTVALUE1}'
+            priority: HIGH
+            manual_close: 'YES'
+            tags:
+              - tag: 'scope'
+                value: 'loadtest'
+      - uuid: a3fbd049ded64f5faa5b741e4f26c2c9
+        name: 'SIPp: sucesso (acumulado)'
+        type: DEPENDENT
+        key: 'flt.sip[success_c]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.success_c'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sip'
+        tags:
+          - tag: 'component'
+            value: 'sip'
+      - uuid: 9db5b1dfa79248fd9128823f3c557e83
+        name: 'SIPp: falhas (acumulado)'
+        type: DEPENDENT
+        key: 'flt.sip[failed_c]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.failed_c'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sip'
+        tags:
+          - tag: 'component'
+            value: 'sip'
+      - uuid: 5d5d074ce38d43b8a66a9aa2bba8b900
+        name: 'SIPp: falhas por timeout de retransmissao UDP (acumulado)'
+        type: DEPENDENT
+        key: 'flt.sip[failed_retrans_c]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.failed_retrans_c'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sip'
+        tags:
+          - tag: 'component'
+            value: 'sip'
+      - uuid: e6bb7df98f4641c687e61510b57da41b
+        name: 'SIPp: falhas por resposta inesperada (acumulado)'
+        type: DEPENDENT
+        key: 'flt.sip[failed_unexpected_c]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.failed_unexpected_c'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sip'
+        tags:
+          - tag: 'component'
+            value: 'sip'
+      - uuid: 44012120475640babf374e87bb662208
+        name: 'SIPp: falhas por timeout de recepcao (acumulado)'
+        type: DEPENDENT
+        key: 'flt.sip[failed_recv_timeout_c]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.failed_recv_timeout_c'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sip'
+        tags:
+          - tag: 'component'
+            value: 'sip'
+      - uuid: e983868b5e1d4780837a52cfefe53b75
+        name: 'SIPp: retransmissoes no periodo'
+        type: DEPENDENT
+        key: 'flt.sip[retrans_p]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.retrans_p'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sip'
+        tags:
+          - tag: 'component'
+            value: 'sip'
+      - uuid: 06e2d49ea351412a809f3632499a367c
+        name: 'SIPp: mensagens de chamadas encerradas no periodo'
+        type: DEPENDENT
+        key: 'flt.sip[dead_msgs_p]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.dead_msgs_p'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sip'
+        tags:
+          - tag: 'component'
+            value: 'sip'
+      - uuid: f312056c121b4d1c880b2154d4ee0925
+        name: 'SIPp: alertas de watchdog no periodo'
+        type: DEPENDENT
+        key: 'flt.sip[watchdog_p]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.watchdog_p'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sip'
+        tags:
+          - tag: 'component'
+            value: 'sip'
+        triggers:
+          - uuid: c14c11e72fbc423e9618a2ac8f596a3a
+            expression: 'last(/Flux Loadtest - Execucao/flt.sip[watchdog_p])>0'
+            recovery_mode: RECOVERY_EXPRESSION
+            recovery_expression: 'last(/Flux Loadtest - Execucao/flt.sip[watchdog_p])=0 or nodata(/Flux Loadtest - Execucao/flt.sip[watchdog_p],{$FLT.NODATA})=1'
+            name: 'SIPp com watchdog (VM de teste sobrecarregada)'
+            priority: WARNING
+            description: 'Os numeros do SIPp deixam de ser confiaveis: reduza a carga ou aumente a VM de teste.'
+            manual_close: 'YES'
+            tags:
+              - tag: 'scope'
+                value: 'loadtest'
+      - uuid: 40db7d9dcf584fc4b73fbd48df4b0338
+        name: 'SIPp: INVITE -> 100 (media do periodo)'
+        type: DEPENDENT
+        key: 'flt.sip[rt_100_ms]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'ms'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.rt_100_ms'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sip'
+        tags:
+          - tag: 'component'
+            value: 'sip'
+      - uuid: 19a3f9880b044d52aa2cee6804761e4a
+        name: 'SIPp: INVITE -> 200 (media do periodo)'
+        type: DEPENDENT
+        key: 'flt.sip[rt_200_ms]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'ms'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.rt_200_ms'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sip'
+        tags:
+          - tag: 'component'
+            value: 'sip'
+      - uuid: a2b090ba66c94c0c99eb21064f625718
+        name: 'SIPp: duracao media das chamadas do periodo'
+        type: DEPENDENT
+        key: 'flt.sip[call_length_ms]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'ms'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.call_length_ms'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.sip'
+        tags:
+          - tag: 'component'
+            value: 'sip'
+      - uuid: dd524f9b502046e986b00eb20271c8e7
+        name: 'wrk estatico: requisicoes por segundo'
+        type: DEPENDENT
+        key: 'flt.web[static,rps]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'rps'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.static.rps'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 4e467940840646d59968aed9eea772b6
+        name: 'wrk estatico: transferencia'
+        type: DEPENDENT
+        key: 'flt.web[static,transfer_bps]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'Bps'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.static.transfer_bps'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: c0b1f2a0ef544f2298a26910838771dc
+        name: 'wrk estatico: latencia media'
+        type: DEPENDENT
+        key: 'flt.web[static,lat_avg_ms]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'ms'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.static.lat_avg_ms'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 48969657783141b4be028c1b1ec8df33
+        name: 'wrk estatico: latencia p50'
+        type: DEPENDENT
+        key: 'flt.web[static,lat_p50_ms]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'ms'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.static.lat_p50_ms'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: fa98e901b3a749188a920525b334c208
+        name: 'wrk estatico: latencia p90'
+        type: DEPENDENT
+        key: 'flt.web[static,lat_p90_ms]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'ms'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.static.lat_p90_ms'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: a523c3dee9b342a091f3cee4cb13fe43
+        name: 'wrk estatico: latencia p99'
+        type: DEPENDENT
+        key: 'flt.web[static,lat_p99_ms]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'ms'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.static.lat_p99_ms'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: ba2015f27ed54334a76f89bb00dd2c88
+        name: 'wrk estatico: requisicoes'
+        type: DEPENDENT
+        key: 'flt.web[static,requests]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.static.requests'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 46022380aa07424da0ef03c1a6987999
+        name: 'wrk estatico: respostas nao 2xx/3xx'
+        type: DEPENDENT
+        key: 'flt.web[static,non2xx]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.static.non2xx'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 274dc5923a3544f6884aac9e19670ab2
+        name: 'wrk estatico: erros de socket'
+        type: DEPENDENT
+        key: 'flt.web[static,socket_errors]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.static.socket_errors'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 7c30b852185f4c5f951f17a0b6efead9
+        name: 'wrk PHP: requisicoes por segundo'
+        type: DEPENDENT
+        key: 'flt.web[php,rps]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'rps'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.php.rps'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 23ae8f363f754f3f9fe5fc4b3f44fa06
+        name: 'wrk PHP: transferencia'
+        type: DEPENDENT
+        key: 'flt.web[php,transfer_bps]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'Bps'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.php.transfer_bps'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 9b4dee4180454453b37e997b72cfe3c7
+        name: 'wrk PHP: latencia media'
+        type: DEPENDENT
+        key: 'flt.web[php,lat_avg_ms]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'ms'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.php.lat_avg_ms'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 5af900c6de834ad6b67eb4895e13064e
+        name: 'wrk PHP: latencia p50'
+        type: DEPENDENT
+        key: 'flt.web[php,lat_p50_ms]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'ms'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.php.lat_p50_ms'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 3d68d0ec20f543eda6dea3709fc10da3
+        name: 'wrk PHP: latencia p90'
+        type: DEPENDENT
+        key: 'flt.web[php,lat_p90_ms]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'ms'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.php.lat_p90_ms'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: a1b5fe3053b3488685f632bddd9f3064
+        name: 'wrk PHP: latencia p99'
+        type: DEPENDENT
+        key: 'flt.web[php,lat_p99_ms]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'ms'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.php.lat_p99_ms'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 9629f0157c0f4968a76a3e239b5bd246
+        name: 'wrk PHP: requisicoes'
+        type: DEPENDENT
+        key: 'flt.web[php,requests]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.php.requests'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 32f98d2aedb84d5c83e23654c0f59403
+        name: 'wrk PHP: respostas nao 2xx/3xx'
+        type: DEPENDENT
+        key: 'flt.web[php,non2xx]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.php.non2xx'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 15bbfc16a05f43a390791e66d2f0517d
+        name: 'wrk PHP: erros de socket'
+        type: DEPENDENT
+        key: 'flt.web[php,socket_errors]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.php.socket_errors'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 3ca22fe96d8141d1b2b9d57b33bff1d3
+        name: 'wrk extra: requisicoes por segundo'
+        type: DEPENDENT
+        key: 'flt.web[extra,rps]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'rps'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.extra.rps'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: ebb79fd2d23d42fd81c5b6b7e4bab43c
+        name: 'wrk extra: transferencia'
+        type: DEPENDENT
+        key: 'flt.web[extra,transfer_bps]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'Bps'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.extra.transfer_bps'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: aca74bea1cba4b3aaec1e143fc29115d
+        name: 'wrk extra: latencia media'
+        type: DEPENDENT
+        key: 'flt.web[extra,lat_avg_ms]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'ms'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.extra.lat_avg_ms'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 834480297a37476193e2fac7eb8c75cd
+        name: 'wrk extra: latencia p50'
+        type: DEPENDENT
+        key: 'flt.web[extra,lat_p50_ms]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'ms'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.extra.lat_p50_ms'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: a2984c4cc6a143bbb53aec2f1b6651f0
+        name: 'wrk extra: latencia p90'
+        type: DEPENDENT
+        key: 'flt.web[extra,lat_p90_ms]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'ms'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.extra.lat_p90_ms'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 163db32a1dca4dfea5762f0d56d09b2e
+        name: 'wrk extra: latencia p99'
+        type: DEPENDENT
+        key: 'flt.web[extra,lat_p99_ms]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'ms'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.extra.lat_p99_ms'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: bc60fdb937af48928d73e26a73e8f3cf
+        name: 'wrk extra: requisicoes'
+        type: DEPENDENT
+        key: 'flt.web[extra,requests]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.extra.requests'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 9708d645cf1043f68372dc655f413ff3
+        name: 'wrk extra: respostas nao 2xx/3xx'
+        type: DEPENDENT
+        key: 'flt.web[extra,non2xx]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.extra.non2xx'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: bda7b7fc14a84c66aab987becdd2b108
+        name: 'wrk extra: erros de socket'
+        type: DEPENDENT
+        key: 'flt.web[extra,socket_errors]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.extra.socket_errors'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.web'
+        tags:
+          - tag: 'component'
+            value: 'web'
+      - uuid: 06689505593746639a2fa87a2af7d0c5
+        name: 'sysbench: transacoes (intervalo)'
+        type: DEPENDENT
+        key: 'flt.mysql[tps_now]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'tps'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.tps_now'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.mysql'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: 191e3bf0543b4398ae88a0621a4c1091
+        name: 'sysbench: consultas (intervalo)'
+        type: DEPENDENT
+        key: 'flt.mysql[qps_now]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'qps'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.qps_now'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.mysql'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: d0802f54e8144847a513460a15440edf
+        name: 'sysbench: latencia p95 (intervalo)'
+        type: DEPENDENT
+        key: 'flt.mysql[lat95_now_ms]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'ms'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.lat95_now_ms'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.mysql'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: ad7798bcd8ad4a1388649dee564c031f
+        name: 'sysbench: erros (intervalo)'
+        type: DEPENDENT
+        key: 'flt.mysql[err_s_now]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '/s'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.err_s_now'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.mysql'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: 301a6afe761f44bb985ddd43c463f6be
+        name: 'sysbench: transacoes (resumo)'
+        type: DEPENDENT
+        key: 'flt.mysql[tps]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'tps'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.tps'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.mysql'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: 9a57427d2e5045aa98a7c578c67a3d49
+        name: 'sysbench: consultas (resumo)'
+        type: DEPENDENT
+        key: 'flt.mysql[qps]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'qps'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.qps'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.mysql'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: a1ab8264959b4d668481f52934c97406
+        name: 'sysbench: latencia media (resumo)'
+        type: DEPENDENT
+        key: 'flt.mysql[lat_avg_ms]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'ms'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.lat_avg_ms'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.mysql'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: 95d7c1b74d9a4c8baf57ae1cbd387a79
+        name: 'sysbench: latencia p95 (resumo)'
+        type: DEPENDENT
+        key: 'flt.mysql[lat_p95_ms]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'ms'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.lat_p95_ms'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.mysql'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: 11db791955ac4f96ad6697b40dd1502f
+        name: 'sysbench: latencia maxima (resumo)'
+        type: DEPENDENT
+        key: 'flt.mysql[lat_max_ms]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'ms'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.lat_max_ms'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.mysql'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: d2298ef715bb44258eef99dc0c445fc7
+        name: 'sysbench: erros ignorados (resumo)'
+        type: DEPENDENT
+        key: 'flt.mysql[errors]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.errors'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.mysql'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: ba1da062b9c64470b00b54d5c52bf9d8
+        name: 'sysbench: reconexoes (resumo)'
+        type: DEPENDENT
+        key: 'flt.mysql[reconnects]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.reconnects'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.mysql'
+        tags:
+          - tag: 'component'
+            value: 'mysql'
+      - uuid: e3900ad65db249caaf6d37ac5eecf356
+        name: 'Resultado: status (ok / interrompido)'
+        type: DEPENDENT
+        key: 'flt.result[status]'
+        delay: '0'
+        history: 90d
+        trends: '0'
+        value_type: CHAR
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.status'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.result'
+        tags:
+          - tag: 'component'
+            value: 'result'
+        triggers:
+          - uuid: 078ba287ec954f2ba2bda985ed822f69
+            expression: 'find(/Flux Loadtest - Execucao/flt.result[status],,"like","interrompido")=1'
+            recovery_mode: RECOVERY_EXPRESSION
+            recovery_expression: 'find(/Flux Loadtest - Execucao/flt.result[status],,"like","ok")=1'
+            name: 'Teste de carga interrompido pelo guard ou pelo operador'
+            opdata: '{ITEM.LASTVALUE1}'
+            priority: AVERAGE
+            manual_close: 'YES'
+            tags:
+              - tag: 'scope'
+                value: 'loadtest'
+      - uuid: 332eb9b2f160416aba8d45ebc59a642c
+        name: 'Resultado: motivo da interrupcao'
+        type: DEPENDENT
+        key: 'flt.result[motivo]'
+        delay: '0'
+        history: 90d
+        trends: '0'
+        value_type: TEXT
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.motivo'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.result'
+        tags:
+          - tag: 'component'
+            value: 'result'
+      - uuid: b56307946312439eaaed3cd151e9b0d9
+        name: 'Resultado: duracao'
+        type: DEPENDENT
+        key: 'flt.result[duracao_s]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        units: 's'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.duracao_s'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.result'
+        tags:
+          - tag: 'component'
+            value: 'result'
+      - uuid: 384486a587d2460e81b809e702eab91d
+        name: 'Resultado: chamadas criadas'
+        type: DEPENDENT
+        key: 'flt.result[sip_criadas]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.sip_criadas'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.result'
+        tags:
+          - tag: 'component'
+            value: 'result'
+      - uuid: 5e9fd117340c48f3a21ef55eb7c83f73
+        name: 'Resultado: chamadas com sucesso'
+        type: DEPENDENT
+        key: 'flt.result[sip_sucesso]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.sip_sucesso'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.result'
+        tags:
+          - tag: 'component'
+            value: 'result'
+      - uuid: ac4ed30f89f24cac8cb328310fb0806e
+        name: 'Resultado: chamadas com falha'
+        type: DEPENDENT
+        key: 'flt.result[sip_falhas]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.sip_falhas'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.result'
+        tags:
+          - tag: 'component'
+            value: 'result'
+      - uuid: 659ba7e4ecbd48c0bc4b2adb415a311f
+        name: 'Resultado: falhas (%)'
+        type: DEPENDENT
+        key: 'flt.result[sip_falha_pct]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.sip_falha_pct'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.result'
+        tags:
+          - tag: 'component'
+            value: 'result'
+      - uuid: c189f7e72e364556a6cb429872f15982
+        name: 'Resultado: pico de simultaneas'
+        type: DEPENDENT
+        key: 'flt.result[sip_pico_simultaneas]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.sip_pico_simultaneas'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.result'
+        tags:
+          - tag: 'component'
+            value: 'result'
+      - uuid: d1c04d8e756c456489949b6edefa9e9e
+        name: 'Resultado: pico de CPS'
+        type: DEPENDENT
+        key: 'flt.result[sip_pico_cps]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.sip_pico_cps'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.result'
+        tags:
+          - tag: 'component'
+            value: 'result'
+      macros:
+        - macro: '{$FLT.SIP.FAIL.MAX}'
+          value: '5'
+          description: 'GUARD_MAX_FAIL_PCT'
+        - macro: '{$FLT.NODATA}'
+          value: '5m'
+          description: 'Sem dados por este tempo = fim do teste'
+  graphs:
+    - uuid: 7fddee778e1a44afafe4ad4e8412a5c1
+      name: 'Flux LT: CPU'
+      graph_items:
+        - color: 1A7C11
+          item:
+            host: 'Flux Loadtest - Sistema'
+            key: 'flt.sys[cpu_pct]'
+        - sortorder: '1'
+          color: F63100
+          item:
+            host: 'Flux Loadtest - Sistema'
+            key: 'flt.sys[cpu_max_core_pct]'
+        - sortorder: '2'
+          color: 2774A4
+          item:
+            host: 'Flux Loadtest - Sistema'
+            key: 'flt.sys[iowait_pct]'
+        - sortorder: '3'
+          color: A54F10
+          item:
+            host: 'Flux Loadtest - Sistema'
+            key: 'flt.sys[softirq_pct]'
+        - sortorder: '4'
+          color: FC6EA3
+          item:
+            host: 'Flux Loadtest - Sistema'
+            key: 'flt.sys[steal_pct]'
+    - uuid: b18449bcb977493683e5d1d233e3f947
+      name: 'Flux LT: memoria'
+      graph_items:
+        - color: 1A7C11
+          item:
+            host: 'Flux Loadtest - Sistema'
+            key: 'flt.sys[mem_used_pct]'
+    - uuid: 224883fa464d4def950268ecfa5935d6
+      name: 'Flux LT: rede (bps)'
+      graph_items:
+        - color: 1A7C11
+          item:
+            host: 'Flux Loadtest - Sistema'
+            key: 'flt.sys[net_rx_mbps]'
+        - sortorder: '1'
+          color: F63100
+          item:
+            host: 'Flux Loadtest - Sistema'
+            key: 'flt.sys[net_tx_mbps]'
+    - uuid: a101549a2922494e838ee5ef00a65f8e
+      name: 'Flux LT: rede (pps)'
+      graph_items:
+        - color: 1A7C11
+          item:
+            host: 'Flux Loadtest - Sistema'
+            key: 'flt.sys[net_rx_pps]'
+        - sortorder: '1'
+          color: F63100
+          item:
+            host: 'Flux Loadtest - Sistema'
+            key: 'flt.sys[net_tx_pps]'
+    - uuid: 82ae458c0d4244b1a0529da11e084f24
+      name: 'Flux LT: disco'
+      graph_items:
+        - color: 1A7C11
+          item:
+            host: 'Flux Loadtest - Sistema'
+            key: 'flt.sys[disk_rd_kbs]'
+        - sortorder: '1'
+          color: F63100
+          item:
+            host: 'Flux Loadtest - Sistema'
+            key: 'flt.sys[disk_wr_kbs]'
+    - uuid: b4f40eee1f304fceb09115703c893466
+      name: 'Flux LT: FreeSWITCH chamadas'
+      graph_items:
+        - color: 1A7C11
+          item:
+            host: 'Flux Loadtest - FreeSWITCH'
+            key: 'flt.app[fs_calls]'
+        - sortorder: '1'
+          color: F63100
+          item:
+            host: 'Flux Loadtest - FreeSWITCH'
+            key: 'flt.app[fs_sessions]'
+        - sortorder: '2'
+          color: 2774A4
+          item:
+            host: 'Flux Loadtest - FreeSWITCH'
+            key: 'flt.app[fs_sps]'
+    - uuid: 4b46fd8a40c848d99b874613ed3f9be3
+      name: 'Flux LT: FreeSWITCH CPU'
+      graph_items:
+        - color: 1A7C11
+          item:
+            host: 'Flux Loadtest - FreeSWITCH'
+            key: 'flt.app[freeswitch_cpu_pct]'
+        - sortorder: '1'
+          color: F63100
+          item:
+            host: 'Flux Loadtest - FreeSWITCH'
+            key: 'flt.app[fs_idle_cpu]'
+    - uuid: c9f8ee96a199410eb070f9c373d5e265
+      name: 'Flux LT: OpenSIPS dialogos'
+      graph_items:
+        - color: 1A7C11
+          item:
+            host: 'Flux Loadtest - OpenSIPS'
+            key: 'flt.app[os_active_dlg]'
+        - sortorder: '1'
+          color: F63100
+          item:
+            host: 'Flux Loadtest - OpenSIPS'
+            key: 'flt.app[os_early_dlg]'
+        - sortorder: '2'
+          color: 2774A4
+          item:
+            host: 'Flux Loadtest - OpenSIPS'
+            key: 'flt.app[os_tm_inuse]'
+    - uuid: ced7c3d8511349cc9928928ad43bf067
+      name: 'Flux LT: OpenSIPS requisicoes'
+      graph_items:
+        - color: 1A7C11
+          item:
+            host: 'Flux Loadtest - OpenSIPS'
+            key: 'flt.app[os_rcv_req_s]'
+    - uuid: d1bb3643c0ce418c8cf93454d3bcd209
+      name: 'Flux LT: MySQL consultas'
+      graph_items:
+        - color: 1A7C11
+          item:
+            host: 'Flux Loadtest - MySQL PXC'
+            key: 'flt.app[db_qps]'
+        - sortorder: '1'
+          color: F63100
+          item:
+            host: 'Flux Loadtest - MySQL PXC'
+            key: 'flt.app[db_select_s]'
+        - sortorder: '2'
+          color: 2774A4
+          item:
+            host: 'Flux Loadtest - MySQL PXC'
+            key: 'flt.app[db_insert_s]'
+        - sortorder: '3'
+          color: A54F10
+          item:
+            host: 'Flux Loadtest - MySQL PXC'
+            key: 'flt.app[db_update_s]'
+    - uuid: 1b1930c1c5f7405cb8dfed54badf1ae8
+      name: 'Flux LT: MySQL threads'
+      graph_items:
+        - color: 1A7C11
+          item:
+            host: 'Flux Loadtest - MySQL PXC'
+            key: 'flt.app[db_threads_running]'
+        - sortorder: '1'
+          color: F63100
+          item:
+            host: 'Flux Loadtest - MySQL PXC'
+            key: 'flt.app[db_threads_connected]'
+    - uuid: b943ef52a0a3426e9559488c47b60710
+      name: 'Flux LT: PXC filas'
+      graph_items:
+        - color: 1A7C11
+          item:
+            host: 'Flux Loadtest - MySQL PXC'
+            key: 'flt.app[db_wsrep_recv_queue]'
+        - sortorder: '1'
+          color: F63100
+          item:
+            host: 'Flux Loadtest - MySQL PXC'
+            key: 'flt.app[db_wsrep_send_queue]'
+        - sortorder: '2'
+          color: 2774A4
+          item:
+            host: 'Flux Loadtest - MySQL PXC'
+            key: 'flt.app[db_wsrep_fc_paused_pct]'
+    - uuid: 2c0792664bd1458b95b27c68dbe0a6b0
+      name: 'Flux LT: nginx / PHP-FPM requisicoes'
+      graph_items:
+        - color: 1A7C11
+          item:
+            host: 'Flux Loadtest - Web'
+            key: 'flt.app[ngx_rps]'
+        - sortorder: '1'
+          color: F63100
+          item:
+            host: 'Flux Loadtest - Web'
+            key: 'flt.app[fpm_rps]'
+    - uuid: 5848ea07edf84f2fbb67fab7e31b7a22
+      name: 'Flux LT: PHP-FPM processos'
+      graph_items:
+        - color: 1A7C11
+          item:
+            host: 'Flux Loadtest - Web'
+            key: 'flt.app[fpm_active]'
+        - sortorder: '1'
+          color: F63100
+          item:
+            host: 'Flux Loadtest - Web'
+            key: 'flt.app[fpm_idle]'
+        - sortorder: '2'
+          color: 2774A4
+          item:
+            host: 'Flux Loadtest - Web'
+            key: 'flt.app[fpm_listen_queue]'
+    - uuid: 07e23df682314452bf90e968195e81fb
+      name: 'Flux LT: geradores CPU'
+      graph_items:
+        - color: 1A7C11
+          item:
+            host: 'Flux Loadtest - Gerador'
+            key: 'flt.app[sipp_cpu_pct]'
+        - sortorder: '1'
+          color: F63100
+          item:
+            host: 'Flux Loadtest - Gerador'
+            key: 'flt.app[wrk_cpu_pct]'
+        - sortorder: '2'
+          color: 2774A4
+          item:
+            host: 'Flux Loadtest - Gerador'
+            key: 'flt.app[sysbench_cpu_pct]'
+    - uuid: 18ea902806aa46eb84709859c61b598a
+      name: 'Flux LT: SIPp CPS'
+      graph_items:
+        - color: 1A7C11
+          item:
+            host: 'Flux Loadtest - Execucao'
+            key: 'flt.sip[target_rate]'
+        - sortorder: '1'
+          color: F63100
+          item:
+            host: 'Flux Loadtest - Execucao'
+            key: 'flt.sip[call_rate]'
+    - uuid: 5463eb51e0de464d8e6290abe52f173a
+      name: 'Flux LT: SIPp simultaneas'
+      graph_items:
+        - color: 1A7C11
+          item:
+            host: 'Flux Loadtest - Execucao'
+            key: 'flt.sip[current_calls]'
+    - uuid: 0a506963836e4d30adb6838783b11638
+      name: 'Flux LT: SIPp sucesso x falha'
+      graph_items:
+        - color: 1A7C11
+          item:
+            host: 'Flux Loadtest - Execucao'
+            key: 'flt.sip[success_p]'
+        - sortorder: '1'
+          color: F63100
+          item:
+            host: 'Flux Loadtest - Execucao'
+            key: 'flt.sip[failed_p]'
+        - sortorder: '2'
+          color: 2774A4
+          item:
+            host: 'Flux Loadtest - Execucao'
+            key: 'flt.sip[retrans_p]'
+    - uuid: 6055e2ff5fb745b28edcda029f53c03a
+      name: 'Flux LT: SIPp tempo de resposta'
+      graph_items:
+        - color: 1A7C11
+          item:
+            host: 'Flux Loadtest - Execucao'
+            key: 'flt.sip[rt_100_ms]'
+        - sortorder: '1'
+          color: F63100
+          item:
+            host: 'Flux Loadtest - Execucao'
+            key: 'flt.sip[rt_200_ms]'
+    - uuid: 600bf61c5c41476bb34343de103d08a3
+      name: 'Flux LT: sysbench'
+      graph_items:
+        - color: 1A7C11
+          item:
+            host: 'Flux Loadtest - Execucao'
+            key: 'flt.mysql[tps_now]'
+        - sortorder: '1'
+          color: F63100
+          item:
+            host: 'Flux Loadtest - Execucao'
+            key: 'flt.mysql[lat95_now_ms]'

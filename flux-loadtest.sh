@@ -20,6 +20,10 @@
 # ou taxa de falha SIP passarem do limite por GUARD_HITS amostras seguidas,
 # a carga para de forma suave e as fases seguintes sao canceladas.
 #
+# Zabbix (opcional, ZABBIX_SERVER): as amostras vao por trapper durante o run
+# (lib/flux_zabbix.py) e uma execucao antiga pode ser importada com "zabbix send".
+# Templates em zabbix/flux-loadtest-templates.yaml.
+#
 # Requisitos na VM de teste (Debian 12):
 #   apt install sip-tester wrk openssh-client curl python3
 #   apt install sysbench default-mysql-client     (somente para --tests mysql)
@@ -32,6 +36,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 readonly COLLECTOR="${SCRIPT_DIR}/lib/collector.sh"
 readonly SCENARIO_TPL="${SCRIPT_DIR}/scenarios/uac-did.xml.in"
+readonly ZBX_HELPER="${SCRIPT_DIR}/lib/flux_zabbix.py"
+readonly ZBX_TEMPLATE="${SCRIPT_DIR}/zabbix/flux-loadtest-templates.yaml"
 readonly UA="flux-loadtest/${VERSION}"
 
 # Codigos de saida
@@ -67,6 +73,8 @@ declare -A CFG=(
     [GUARD_MAX_WSREP_FC_PCT]="10" [GUARD_MIN_WSREP_CLUSTER_SIZE]="0"
     [SAMPLE_INTERVAL]="5" [BASELINE_SECONDS]="60" [COOLDOWN_SECONDS]="60"
     [RESULTS_DIR]="/var/lib/flux-loadtest/results"
+    [ZABBIX_SERVER]="" [ZABBIX_PORT]="10051" [ZABBIX_HOST_PREFIX]="flt-" [ZABBIX_LIVE]="1"
+    [ZABBIX_API_URL]="" [ZABBIX_API_TOKEN_FILE]="" [ZABBIX_TLS_INSECURE]="0"
 )
 
 load_config() {
@@ -103,7 +111,7 @@ validate_config() {
                MYSQL_BENCH_THREADS GUARD_MAX_CPU_PCT GUARD_MAX_GEN_CPU_PCT GUARD_MAX_MEM_PCT \
                GUARD_MIN_DISK_FREE_PCT GUARD_MAX_FAIL_PCT GUARD_MAX_REPL_LAG GUARD_MAX_CORE_PCT \
                GUARD_HITS GUARD_MAX_WSREP_FC_PCT GUARD_MIN_WSREP_CLUSTER_SIZE \
-               SAMPLE_INTERVAL BASELINE_SECONDS COOLDOWN_SECONDS; do
+               SAMPLE_INTERVAL BASELINE_SECONDS COOLDOWN_SECONDS ZABBIX_PORT; do
         is_uint "${CFG[${key}]}" || die "${E_CONFIG}" "${key} deve ser inteiro: '${CFG[${key}]}'"
     done
     ((CFG[SAMPLE_INTERVAL] >= 1)) || die "${E_CONFIG}" "SAMPLE_INTERVAL minimo: 1"
@@ -117,6 +125,16 @@ validate_config() {
         || die "${E_CONFIG}" "SSH_KEY_FROM invalido (IPs/CIDR separados por virgula)"
     ((CFG[GUARD_HITS] >= 1)) || die "${E_CONFIG}" "GUARD_HITS minimo: 1"
     [[ ${CFG[RESULTS_DIR]} == /* ]] || die "${E_CONFIG}" "RESULTS_DIR deve ser caminho absoluto"
+    [[ -z ${CFG[ZABBIX_SERVER]} || ${CFG[ZABBIX_SERVER]} =~ ^[A-Za-z0-9._:-]+$ ]] \
+        || die "${E_CONFIG}" "ZABBIX_SERVER invalido: ${CFG[ZABBIX_SERVER]}"
+    [[ ${CFG[ZABBIX_HOST_PREFIX]} =~ ^[A-Za-z0-9._-]{0,32}$ ]] \
+        || die "${E_CONFIG}" "ZABBIX_HOST_PREFIX invalido (letras, numeros, . _ -)"
+    [[ ${CFG[ZABBIX_LIVE]} == [01] && ${CFG[ZABBIX_TLS_INSECURE]} == [01] ]] \
+        || die "${E_CONFIG}" "ZABBIX_LIVE e ZABBIX_TLS_INSECURE devem ser 0 ou 1"
+    [[ -z ${CFG[ZABBIX_API_URL]} || ${CFG[ZABBIX_API_URL]} =~ ^https?://[^[:space:]]+$ ]] \
+        || die "${E_CONFIG}" "ZABBIX_API_URL invalida: ${CFG[ZABBIX_API_URL]}"
+    [[ -z ${CFG[ZABBIX_API_TOKEN_FILE]} || ${CFG[ZABBIX_API_TOKEN_FILE]} == /* ]] \
+        || die "${E_CONFIG}" "ZABBIX_API_TOKEN_FILE deve ser caminho absoluto"
 }
 
 # --------------------------------------------------------------- servidores
@@ -365,6 +383,7 @@ REPORT_DONE=0
 SIPP_PID=""
 SIPP_SOFT_SENT=0
 LOAD_PID=""
+ZBX_PID=""
 declare -A COLLECTOR_PID=()
 declare -A GUARD_COUNT=()
 declare -A STALE_WARNED=()
@@ -374,6 +393,8 @@ now() { printf '%(%s)T' -1; }
 phase_begin() {
     PHASE_NAME=$1
     PHASE_START=$(now)
+    # inicio das fases para o envio ao vivo (phases.tsv so recebe a fase concluida)
+    printf '%s\t%s\n' "${PHASE_NAME}" "${PHASE_START}" >> "${RUN_DIR}/phases-start.tsv"
     log "fase ${PHASE_NAME}: inicio"
 }
 
@@ -565,6 +586,7 @@ on_exit() {
     if [[ -n ${RUN_DIR} && -d ${RUN_DIR} ]] && ((REPORT_DONE == 0)); then
         generate_report "${RUN_DIR}" || warn "falha ao gerar o relatorio parcial"
     fi
+    zabbix_live_stop
     exit "${rc}"
 }
 
@@ -604,6 +626,118 @@ snapshot() {
         remote_script "${id}" "${cmd}" > "${out}" 2>&1 || printf '\n(falha parcial na coleta do snapshot)\n' >> "${out}"
     done
     log "snapshots ${tag} salvos"
+}
+
+# --------------------------------------------------------------- Zabbix
+zbx_enabled() { [[ -n ${CFG[ZABBIX_SERVER]} ]]; }
+
+zbx_trap_args() {
+    ZBX_ARGS=(--server "${CFG[ZABBIX_SERVER]}" --port "${CFG[ZABBIX_PORT]}" --prefix "${CFG[ZABBIX_HOST_PREFIX]}")
+}
+
+zbx_api_args() {
+    require_cfg ZABBIX_API_URL ZABBIX_API_TOKEN_FILE
+    ZBX_ARGS=(--api-url "${CFG[ZABBIX_API_URL]}" --token-file "${CFG[ZABBIX_API_TOKEN_FILE]}")
+    [[ ${CFG[ZABBIX_TLS_INSECURE]} == 1 ]] && ZBX_ARGS+=(--insecure)
+    return 0
+}
+
+# Envio ao vivo: o helper acompanha o RUN_DIR e encerra com SIGTERM (ou se este
+# processo morrer). Falha no Zabbix nao interrompe o teste: so vai para zabbix.log.
+zabbix_live_start() {
+    zbx_enabled && [[ ${CFG[ZABBIX_LIVE]} == 1 ]] || return 0
+    zbx_trap_args
+    python3 "${ZBX_HELPER}" send "${RUN_DIR}" --follow --pid "$$" "${ZBX_ARGS[@]}" \
+        >> "${RUN_DIR}/zabbix.log" 2>&1 &
+    ZBX_PID=$!
+    log "envio ao vivo para o Zabbix ${CFG[ZABBIX_SERVER]}:${CFG[ZABBIX_PORT]} (pid ${ZBX_PID}, log zabbix.log)"
+}
+
+zabbix_live_stop() {
+    [[ -n ${ZBX_PID} ]] || return 0
+    local pid=${ZBX_PID} i
+    ZBX_PID=""
+    kill -TERM "${pid}" 2>/dev/null || true
+    for ((i = 0; i < 60; i++)); do
+        kill -0 "${pid}" 2>/dev/null || break
+        sleep 1
+    done
+    if kill -0 "${pid}" 2>/dev/null; then
+        kill -KILL "${pid}" 2>/dev/null || true
+        warn "envio ao Zabbix nao terminou em 60 s; reenvie com: $0 zabbix send ${RUN_DIR} --force"
+    fi
+    wait "${pid}" 2>/dev/null || warn "envio ao Zabbix com falhas: $(tail -n 1 "${RUN_DIR}/zabbix.log" 2>/dev/null)"
+    log "zabbix: $(grep -o 'enviados .*' "${RUN_DIR}/zabbix.log" 2>/dev/null | tail -n 1)"
+}
+
+usage_zabbix() {
+    cat <<EOF
+Uso: $0 zabbix <sub> [opcoes] [-c ARQUIVO]
+
+  setup [--import-template]  cria o grupo "Flux Loadtest" e os hosts <ZABBIX_HOST_PREFIX><id>
+                             (servidores da configuracao + gen + run) e vincula os templates.
+                             --import-template importa antes ${ZBX_TEMPLATE#"${SCRIPT_DIR}/"}
+  send <diretorio> [--force] [--dry-run]
+                             importa uma execucao com os timestamps originais (--force reenvia
+                             uma execucao ja enviada; --dry-run so mostra os valores)
+  check                      testa a API (ZABBIX_API_URL) e o trapper (ZABBIX_SERVER)
+EOF
+}
+
+cmd_zabbix() {
+    local sub=${1:-} opt import=0 force=0 dry=0 dir="" id
+    (($# > 0)) && shift
+    check_local_deps python3
+    case "${sub}" in
+        setup)
+            for opt in "$@"; do
+                case "${opt}" in
+                    --import-template) import=1 ;;
+                    *) usage_zabbix >&2; die "${E_USAGE}" "opcao invalida para zabbix setup: ${opt}" ;;
+                esac
+            done
+            build_hosts
+            zbx_api_args
+            ZBX_ARGS+=(--prefix "${CFG[ZABBIX_HOST_PREFIX]}" --gen-cpu-max "${CFG[GUARD_MAX_GEN_CPU_PCT]}")
+            ((import)) && ZBX_ARGS+=(--template "${ZBX_TEMPLATE}")
+            for id in "${HOST_IDS[@]}"; do
+                ZBX_ARGS+=(--host "${id}:${HOST_ROLE[${id}]}:${HOST_ADDR[${id}]}")
+            done
+            ZBX_ARGS+=(--host "gen:gen::vm-teste")
+            python3 "${ZBX_HELPER}" setup "${ZBX_ARGS[@]}"
+            ;;
+        send)
+            for opt in "$@"; do
+                case "${opt}" in
+                    --force) force=1 ;;
+                    --dry-run) dry=1 ;;
+                    -*) usage_zabbix >&2; die "${E_USAGE}" "opcao invalida para zabbix send: ${opt}" ;;
+                    *) [[ -z ${dir} ]] || die "${E_USAGE}" "informe um unico diretorio"; dir=${opt%/} ;;
+                esac
+            done
+            [[ -n ${dir} ]] || { usage_zabbix >&2; die "${E_USAGE}" "informe o diretorio da execucao"; }
+            [[ -d ${dir} ]] || die "${E_USAGE}" "diretorio de resultado inexistente: ${dir}"
+            ((dry)) || zbx_enabled || die "${E_CONFIG}" "ZABBIX_SERVER nao definido"
+            zbx_trap_args
+            ((force)) && ZBX_ARGS+=(--force)
+            ((dry)) && ZBX_ARGS+=(--dry-run)
+            python3 "${ZBX_HELPER}" send "${dir}" "${ZBX_ARGS[@]}"
+            ;;
+        check)
+            local -a args=()
+            if [[ -n ${CFG[ZABBIX_API_URL]} ]]; then
+                args+=(--api-url "${CFG[ZABBIX_API_URL]}")
+                [[ -n ${CFG[ZABBIX_API_TOKEN_FILE]} ]] && args+=(--token-file "${CFG[ZABBIX_API_TOKEN_FILE]}")
+                [[ ${CFG[ZABBIX_TLS_INSECURE]} == 1 ]] && args+=(--insecure)
+            fi
+            zbx_trap_args
+            zbx_enabled || ZBX_ARGS=(--prefix "${CFG[ZABBIX_HOST_PREFIX]}")
+            ((${#args[@]} > 0)) || zbx_enabled || die "${E_CONFIG}" "defina ZABBIX_SERVER e/ou ZABBIX_API_URL"
+            python3 "${ZBX_HELPER}" check "${args[@]+"${args[@]}"}" "${ZBX_ARGS[@]}"
+            ;;
+        ""|-h|--help) usage_zabbix ;;
+        *) usage_zabbix >&2; die "${E_USAGE}" "subcomando invalido: zabbix ${sub}" ;;
+    esac
 }
 
 # --------------------------------------------------------------- fases de carga
@@ -1376,6 +1510,10 @@ Acoes:
   smoke [--did N]       envia 1 chamada (hold 5 s) e mostra o resultado
   run [opcoes]          executa o teste completo e gera o relatorio
   report <diretorio>    regenera o report.txt de uma execucao
+  zabbix <sub>          integracao com o Zabbix (ZABBIX_* na configuracao):
+      setup             cria os hosts e vincula os templates (--import-template importa o YAML)
+      send <diretorio>  importa uma execucao (--force reenvia, --dry-run so mostra)
+      check             testa a API e o trapper
   keys <sub> [opcoes]   chaves SSH da VM de teste para os servidores:
       create            gera a chave (SSH_KEY, SSH_KEY_TYPE); nao sobrescreve uma existente
       trust             grava as chaves de host (ssh-keyscan) apos conferencia
@@ -1668,6 +1806,10 @@ cmd_check() {
             printf '  e se o usuario SSH pode rodar o fs_cli (FS_CLI_CMD="%s")\n' "${CFG[FS_CLI_CMD]}"
         fi
     done
+    if zbx_enabled || [[ -n ${CFG[ZABBIX_API_URL]} ]]; then
+        printf '\n== Zabbix\n'
+        cmd_zabbix check 2>&1 | sed 's/^/  /' || true
+    fi
     printf '\nSomente leitura: nada foi alterado nos servidores.\n'
 }
 
@@ -1714,6 +1856,7 @@ cmd_run() {
     has_test sip && deps+=(sipp python3 shuf ip)
     has_test web && deps+=(wrk)
     has_test mysql && deps+=(sysbench mysql)
+    zbx_enabled && [[ ${CFG[ZABBIX_LIVE]} == 1 ]] && deps+=(python3)
     check_local_deps "${deps[@]}"
     build_hosts
     build_ssh
@@ -1769,6 +1912,7 @@ cmd_run() {
     max_coll=$(( CFG[BASELINE_SECONDS] + CFG[COOLDOWN_SECONDS] + OPT_WINDOW + OPT_HOLD + 180
                + (OPT_WEB_DURATION + 15) * 3 + OPT_MYSQL_DURATION * 2 + 600 ))
     start_collectors "${max_coll}"
+    zabbix_live_start
 
     phase_begin baseline
     wait_seconds "${CFG[BASELINE_SECONDS]}"
@@ -1798,6 +1942,7 @@ cmd_run() {
     snapshot post
     [[ -z ${ABORT_REASON} ]] || printf '%s\n' "${ABORT_REASON}" > "${RUN_DIR}/abort.txt"
     generate_report "${RUN_DIR}"
+    zabbix_live_stop
     tar -C "${CFG[RESULTS_DIR]}" -czf "${RUN_DIR}.tar.gz" "${RUN_ID}" \
         && log "pacote: ${RUN_DIR}.tar.gz"
     if [[ -n ${ABORT_REASON} ]]; then
@@ -1819,7 +1964,7 @@ main() {
     done
     case "${action}" in
         ""|-h|--help|help) usage; exit 0 ;;
-        check|smoke|run|report|keys) ;;
+        check|smoke|run|report|keys|zabbix) ;;
         *) usage >&2; die "${E_USAGE}" "acao invalida: ${action}" ;;
     esac
     if [[ ${action} == report ]]; then
@@ -1847,6 +1992,7 @@ main() {
             cmd_smoke
             ;;
         run) cmd_run "${rest[@]+"${rest[@]}"}" ;;
+        zabbix) cmd_zabbix "${rest[@]+"${rest[@]}"}" ;;
     esac
 }
 
