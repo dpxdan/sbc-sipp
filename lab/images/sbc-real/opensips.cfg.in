@@ -1,0 +1,553 @@
+#### Configuração FluxSBC OpenSIPS 3.6 - LABORATÓRIO STFC (gerado pelo start.sh a partir de opensips.cfg.in)
+#### Origem: sbc01/opensips/opensips.cfg de produção. Diferenças marcadas com [lab].
+#### SBC de chamadas (load_balancer para o pool FreeSWITCH)
+#### + mid-registrar (REGISTER encaminhado ao pool via dispatcher)
+####
+#### Convenção de log: ci=<Call-ID> rt=<rota> st=<etapa> ...
+#### L_DBG  = rastreio de fluxo (rota/etapa percorrida)
+#### L_INFO = decisão relevante (nó escolhido, resultado de lookup)
+#### L_WARN = rejeição, indisponibilidade, failover
+
+log_level=@LOG_LEVEL@
+xlog_level=@LOG_LEVEL@
+# [lab] sem syslog no container: log em stderr, gravado em /var/log/opensips.log
+syslog_enabled=no
+stderror_enabled=yes
+server_header="Server: FluxSBC-OpenSIPS"
+user_agent_header="User-Agent: FluxSBC-OpenSIPS"
+udp_workers=4
+open_files_limit = 10485
+mhomed=1
+
+socket=udp:@PUB_IP@:5060
+socket=udp:@PUB_IP@:5065
+
+# VIP interno - face FreeSWITCH.
+socket=udp:@INT_IP@:5060
+
+# [lab] devices no macOS: o Docker Desktop publica 127.0.0.1:@MAC_SIP_PORT@ nesta porta. O
+# endereco anunciado (Via, Record-Route, Contact) e o que o Mac alcanca.
+socket=udp:@PUB_IP@:5062 as 127.0.0.1:@MAC_SIP_PORT@
+socket=udp:@INT_IP@:5062 as 127.0.0.1:@MAC_SIP_PORT@
+
+disable_503_translation=yes
+
+auto_aliases=no
+dns=no
+rev_dns=no
+mpath="/usr/lib/x86_64-linux-gnu/opensips/modules/"
+
+####### Módulos #######
+loadmodule "httpd.so"
+loadmodule "mi_http.so"
+
+loadmodule "proto_udp.so"
+loadmodule "db_mysql.so"
+loadmodule "signaling.so"
+loadmodule "sl.so"
+loadmodule "tm.so"
+loadmodule "rr.so"
+loadmodule "maxfwd.so"
+loadmodule "sipmsgops.so"
+loadmodule "mi_fifo.so"
+loadmodule "permissions.so"
+loadmodule "dialog.so"
+loadmodule "freeswitch.so"
+loadmodule "load_balancer.so"
+
+# --- Suporte a REGISTER ---
+loadmodule "usrloc.so"
+loadmodule "registrar.so"
+loadmodule "mid_registrar.so"
+loadmodule "nathelper.so"
+loadmodule "dispatcher.so"
+
+modparam("httpd", "port", 8888)
+modparam("mi_http", "root", "mi")
+
+modparam("mi_fifo", "fifo_name", "/run/opensips/opensips_fifo")
+modparam("mi_fifo", "fifo_mode", 0660)
+
+modparam("tm", "fr_timeout", 5)
+modparam("tm", "fr_inv_timeout", 30)
+modparam("tm", "restart_fr_on_each_reply", 0)
+
+modparam("rr", "append_fromtag", 1)
+
+modparam("permissions", "db_url", "@DB_URL@")
+
+modparam("dialog", "db_mode", 0)
+modparam("dialog", "default_timeout", 43200)
+
+modparam("freeswitch", "event_heartbeat_interval", 5)
+modparam("freeswitch", "esl_connect_timeout", 3000)
+
+modparam("load_balancer", "db_url", "@DB_URL@")
+modparam("load_balancer", "probing_interval", 10)
+modparam("load_balancer", "probing_method", "INFO")
+modparam("load_balancer", "probing_from", "sip:lbprobe@@INT_IP@")
+modparam("load_balancer", "probing_reply_codes", "404")
+modparam("load_balancer", "fetch_freeswitch_stats", 1)
+modparam("load_balancer", "initial_freeswitch_load", 1000)
+modparam("load_balancer", "probing_verbose", 1)
+
+####### REGISTER: location, mid-registrar, NAT e dispatcher #######
+
+# Contatos reais dos devices (memória local do mid-registrar).
+# use_domain fica em 0 (padrão): a busca em location considera só o usuário.
+modparam("usrloc", "nat_bflag", "NAT")
+
+# Persistência do location. Requer a tabela 'location' criada no schema.
+# Sem isso, todas as registrações são perdidas no restart do OpenSIPS.
+#modparam("usrloc", "db_url", "@DB_URL@")
+#modparam("usrloc", "db_mode", 1)
+
+# mode 0 = reescreve o Contact (não depende de suporte a Path no mod_sofia)
+# e espelha todo REGISTER para o FreeSWITCH (sem throttling).
+modparam("mid_registrar", "mode", 0)
+
+# Expires que o OpenSIPS pede ao FreeSWITCH.
+modparam("mid_registrar", "outgoing_expires", 300)
+
+modparam("mid_registrar", "min_expires", 60)
+modparam("mid_registrar", "max_expires", 3600)
+modparam("mid_registrar", "received_avp", "$avp(received)")
+modparam("mid_registrar", "extra_contact_params_avp", "$avp(extra_ct_params)")
+
+modparam("nathelper", "received_avp", "$avp(received)")
+modparam("nathelper", "natping_interval", 30)
+modparam("nathelper", "sipping_bflag", "SIP_PING")
+# O keepalive sai pela face pública, que é onde os devices estão.
+modparam("nathelper", "sipping_from", "sip:pinger@@PUB_IP@")
+
+# setid 2 = mesmos nós do pool FreeSWITCH usados pelo load_balancer (grupo 1).
+# O dispatcher fixa o REGISTER e as chamadas do ramal no mesmo nó.
+modparam("dispatcher", "db_url", "@DB_URL@")
+modparam("dispatcher", "ds_ping_method", "INFO")
+modparam("dispatcher", "ds_ping_from", "sip:dsprobe@@INT_IP@")
+modparam("dispatcher", "ds_ping_interval", 10)
+modparam("dispatcher", "ds_probing_mode", 1)
+modparam("dispatcher", "options_reply_codes", "404")
+
+loadmodule "tracer.so"
+modparam("tracer", "trace_id","[db_id]uri=@DB_URL@;table=sip_trace;")
+
+####### Roteamento #######
+route {
+    xlog("L_DBG",
+         "ci=$ci rt=MAIN st=recv m=$rm src=$si:$sp sock=$socket_in(ip):$socket_in(port) ru=$ru fu=$fu tu=$tu ua=$ua\n");
+
+    if (!mf_process_maxfwd_header(10)) {
+        xlog("L_WARN", "ci=$ci rt=MAIN st=drop motivo=max-forwards m=$rm src=$si:$sp\n");
+        send_reply(483, "Too Many Hops");
+        exit;
+    }
+
+    # Teste de NAT apenas na face pública. Tráfego vindo do VIP interno é
+    # do pool FreeSWITCH e não deve receber flag de NAT.
+    if ($socket_in(ip) != "@INT_IP@" || $socket_in(port) == 5062) {
+        if (nat_uac_test("private-contact,diff-ip-src-via,private-via,diff-port-src-via")) {
+            setbflag("NAT");
+            xlog("L_DBG", "ci=$ci rt=MAIN st=nat-detectado src=$si:$sp ct=$ct\n");
+        }
+    }
+
+    if (is_method("OPTIONS") && is_myself($rd, $rp)) {
+        xlog("L_DBG", "ci=$ci rt=MAIN st=options-keepalive src=$si:$sp\n");
+        send_reply(200, "OK");
+        exit;
+    }
+
+    if (has_totag()) {
+        xlog("L_DBG", "ci=$ci rt=MAIN st=in-dialog m=$rm src=$si:$sp ru=$ru\n");
+
+        if (loose_route()) {
+            xlog("L_INFO",
+                 "ci=$ci rt=MAIN st=loose-route m=$rm src=$si:$sp du=$du ru=$ru\n");
+
+            if (isbflagset("NAT")) {
+                fix_nated_contact();
+                xlog("L_DBG", "ci=$ci rt=MAIN st=fix-nated-contact m=$rm ct=$ct\n");
+            }
+
+            route(RELAY);
+        }
+
+        if (is_method("ACK") && t_check_trans()) {
+            xlog("L_DBG", "ci=$ci rt=MAIN st=ack-local\n");
+            route(RELAY);
+        }
+
+        xlog("L_WARN",
+             "ci=$ci rt=MAIN st=drop motivo=sem-dialogo m=$rm src=$si:$sp ru=$ru\n");
+        send_reply(404, "Not Here");
+        exit;
+    }
+
+    if (is_method("CANCEL")) {
+        if (t_check_trans()) {
+            xlog("L_INFO", "ci=$ci rt=MAIN st=cancel src=$si:$sp\n");
+            route(RELAY);
+        }
+
+        xlog("L_DBG", "ci=$ci rt=MAIN st=cancel-sem-transacao src=$si:$sp\n");
+        exit;
+    }
+
+    t_check_trans();
+
+    # REGISTER não passa pela ACL de IP: o device é autenticado por digest
+    # no próprio FreeSWITCH, e o OpenSIPS apenas repassa o desafio.
+    if (is_method("REGISTER")) {
+        xlog("L_DBG",
+             "ci=$ci rt=MAIN st=dispatch destino=REGISTRAR aor=$tu exp=$hdr(Expires)\n");
+        route(REGISTRAR);
+        exit;
+    }
+
+    # Origem no grupo 20 = nó do pool FreeSWITCH.
+    if (check_source_address(20)) {
+        # Destino em um dos nossos sockets: é um contato reescrito pelo
+        # mid-registrar, ou seja, chamada para device registrado aqui.
+        if (is_myself($rd, $rp)) {
+            xlog("L_DBG",
+                 "ci=$ci rt=MAIN st=dispatch destino=TO_DEVICE origem=pool-fs ru=$ru\n");
+            route(TO_DEVICE);
+            exit;
+        }
+
+        # Qualquer outro destino é saída do FreeSWITCH para fora.
+        xlog("L_DBG",
+             "ci=$ci rt=MAIN st=dispatch destino=PROXY origem=pool-fs ru=$ru\n");
+        route(PROXY);
+        exit;
+    }
+
+    if (!is_method("INVITE|SUBSCRIBE|PUBLISH|MESSAGE|INFO|REFER|NOTIFY")) {
+        xlog("L_WARN",
+             "ci=$ci rt=MAIN st=drop motivo=metodo-nao-permitido m=$rm src=$si:$sp\n");
+        send_reply(405, "Method Not Allowed");
+        exit;
+    }
+    if (is_method("INVITE") && !has_totag()) {
+            trace("db_id", "d", "sip"); 
+    }
+    # Origem no grupo 10 = peer/operadora confiável por IP.
+    if (check_source_address(10)) {
+        xlog("L_DBG",
+             "ci=$ci rt=MAIN st=dispatch destino=TO_FREESWITCH origem=peer-acl m=$rm ru=$ru\n");
+        route(TO_FREESWITCH);
+        exit;
+    }
+
+    # Não é peer conhecido: só é aceito se for um device já registrado
+    # neste OpenSIPS. Nesse caso vai para o nó que guarda o REGISTER dele.
+    if (is_registered("location", "sip:$fU@$fd")) {
+        xlog("L_DBG",
+             "ci=$ci rt=MAIN st=dispatch destino=TO_REGISTRAR_NODE origem=device fu=$fU m=$rm\n");
+        route(TO_REGISTRAR_NODE);
+        exit;
+    }
+
+    xlog("L_WARN",
+         "ci=$ci rt=MAIN st=drop motivo=origem-nao-autorizada m=$rm src=$si:$sp fu=$fu ru=$ru\n");
+    send_reply(403, "Forbidden");
+    exit;
+}
+
+route[REGISTRAR] {
+    xlog("L_DBG",
+         "ci=$ci rt=REGISTRAR st=entrada aor=$tu ct=$ct src=$si:$sp\n");
+
+    if (isbflagset("NAT")) {
+        fix_nated_register();
+        setbflag("SIP_PING");
+        xlog("L_DBG",
+             "ci=$ci rt=REGISTRAR st=fix-nated-register received=$avp(received)\n");
+    }
+
+    $avp(extra_ct_params) = ";x-src-ip=" + $si + ";x-src-port=" + $sp;
+
+    mid_registrar_save("location");
+    xlog("L_DBG", "ci=$ci rt=REGISTRAR st=mid_registrar_save rc=$retcode aor=$tu\n");
+
+    switch ($retcode) {
+    case 1:
+        # alg 1 = hash sobre From URI | flag u = só a parte de usuário
+        # flag f = guarda os demais destinos para ds_next_dst()
+        if (!ds_select_dst(2, 1, "fu")) {
+            xlog("L_WARN",
+                 "ci=$ci rt=REGISTRAR st=erro motivo=sem-no-ativo setid=2 fu=$fU\n");
+            send_reply(503, "No Registrar Available");
+            exit;
+        }
+
+        xlog("L_INFO",
+             "ci=$ci rt=REGISTRAR st=encaminha fu=$fU du=$du setid=2 alg=hash-from\n");
+
+        t_on_branch("LOG_BRANCH");
+        t_on_reply("LOG_REPLY");
+        t_on_failure("REG_FAILOVER");
+
+        if (!t_relay()) {
+            xlog("L_WARN", "ci=$ci rt=REGISTRAR st=erro motivo=t_relay du=$du\n");
+            send_reply(500, "Relay Error");
+        }
+        break;
+
+    case 2:
+        # Só ocorre em mode 1/2 (throttling). Em mode 0 é inalcançável.
+        xlog("L_INFO", "ci=$ci rt=REGISTRAR st=absorvido aor=$tu\n");
+        break;
+
+    default:
+        xlog("L_WARN",
+             "ci=$ci rt=REGISTRAR st=erro motivo=mid_registrar_save rc=$retcode aor=$tu\n");
+        send_reply(500, "Registrar Error");
+    }
+
+    exit;
+}
+
+route[TO_FREESWITCH] {
+    xlog("L_DBG", "ci=$ci rt=TO_FREESWITCH st=entrada m=$rm ru=$ru src=$si\n");
+
+    remove_hf("X-Flux-Src-IP");
+    append_hf("X-Flux-Src-IP: $si\r\n");
+
+    if (!lb_start(1, "channels", "rs")) {
+        xlog("L_WARN",
+             "ci=$ci rt=TO_FREESWITCH st=erro motivo=sem-no-disponivel grupo=1 recurso=channels\n");
+        send_reply(503, "No FreeSWITCH Available");
+        exit;
+    }
+
+    xlog("L_INFO",
+         "ci=$ci rt=TO_FREESWITCH st=lb-selecionado du=$du grupo=1 m=$rm src=$si ru=$ru\n");
+
+    if (is_method("INVITE|SUBSCRIBE")) {
+        record_route();
+        xlog("L_DBG", "ci=$ci rt=TO_FREESWITCH st=record-route\n");
+    }
+
+    t_on_branch("LOG_BRANCH");
+    t_on_reply("LOG_REPLY");
+    t_on_failure("FS_FAILOVER");
+    route(RELAY);
+}
+
+# Tráfego originado por device registrado: sem balanceamento, precisa cair
+# no mesmo nó onde o REGISTER foi gravado (mesmo hash sobre o usuário).
+route[TO_REGISTRAR_NODE] {
+    xlog("L_DBG", "ci=$ci rt=TO_REGISTRAR_NODE st=entrada m=$rm fu=$fU ru=$ru\n");
+
+    remove_hf("X-Flux-Src-IP");
+    append_hf("X-Flux-Src-IP: $si\r\n");
+
+    if (!ds_select_dst(2, 1, "fu")) {
+        xlog("L_WARN",
+             "ci=$ci rt=TO_REGISTRAR_NODE st=erro motivo=sem-no-ativo setid=2 fu=$fU\n");
+        send_reply(503, "No Registrar Node Available");
+        exit;
+    }
+
+    xlog("L_INFO",
+         "ci=$ci rt=TO_REGISTRAR_NODE st=ds-selecionado du=$du setid=2 fu=$fU ru=$ru\n");
+
+    if (is_method("INVITE|SUBSCRIBE")) {
+        record_route();
+        xlog("L_DBG", "ci=$ci rt=TO_REGISTRAR_NODE st=record-route\n");
+    }
+
+    t_on_branch("LOG_BRANCH");
+    t_on_reply("LOG_REPLY");
+    t_on_failure("REG_NODE_FAILOVER");
+    route(RELAY);
+}
+
+route[TO_DEVICE] {
+    xlog("L_DBG", "ci=$ci rt=TO_DEVICE st=entrada m=$rm ru=$ru src=$si\n");
+
+    if (!mid_registrar_lookup("location")) {
+        xlog("L_WARN",
+             "ci=$ci rt=TO_DEVICE st=erro motivo=device-nao-registrado ramal=$rU\n");
+        send_reply(404, "User Offline");
+        exit;
+    }
+
+    xlog("L_INFO",
+         "ci=$ci rt=TO_DEVICE st=lookup-ok ramal=$rU du=$du ru=$ru\n");
+
+    if (is_method("INVITE|SUBSCRIBE")) {
+        record_route();
+        xlog("L_DBG", "ci=$ci rt=TO_DEVICE st=record-route\n");
+    }
+
+    t_on_branch("LOG_BRANCH");
+    t_on_reply("LOG_REPLY");
+    route(RELAY);
+}
+
+route[PROXY] {
+    xlog("L_INFO",
+         "ci=$ci rt=PROXY st=saida-fs m=$rm src=$si destino=$rd:$rp ru=$ru\n");
+
+    remove_hf("X-Flux-Src-IP");
+
+    if (is_method("INVITE|SUBSCRIBE")) {
+        record_route();
+        xlog("L_DBG", "ci=$ci rt=PROXY st=record-route\n");
+    }
+
+    t_on_branch("LOG_BRANCH");
+    t_on_reply("LOG_REPLY");
+    route(RELAY);
+}
+
+route[RELAY] {
+    xlog("L_DBG", "ci=$ci rt=RELAY st=t_relay m=$rm ru=$ru du=$du\n");
+
+    if (!t_relay()) {
+        xlog("L_WARN",
+             "ci=$ci rt=RELAY st=erro motivo=t_relay m=$rm ru=$ru du=$du\n");
+        send_reply(500, "Relay Error");
+    }
+
+    exit;
+}
+
+####### Rastreio de branches e respostas #######
+
+branch_route[LOG_BRANCH] {
+    xlog("L_INFO",
+         "ci=$ci rt=BRANCH st=envio idx=$T_branch_idx m=$rm ru=$ru du=$du\n");
+}
+
+onreply_route[LOG_REPLY] {
+    # Respostas de probing (INFO) não interessam no rastreio de chamada.
+    if ($rm == "INFO") {
+        exit;
+    }
+
+    if ($rs >= 200) {
+        xlog("L_INFO",
+             "ci=$ci rt=REPLY st=final code=$rs reason=$rr m=$rm src=$si idx=$T_branch_idx\n");
+    } else {
+        xlog("L_DBG",
+             "ci=$ci rt=REPLY st=provisoria code=$rs reason=$rr m=$rm src=$si idx=$T_branch_idx\n");
+    }
+}
+
+failure_route[FS_FAILOVER] {
+    if (t_was_cancelled()) {
+        xlog("L_DBG", "ci=$ci rt=FS_FAILOVER st=cancelada-pelo-chamador\n");
+        exit;
+    }
+
+    xlog("L_WARN",
+         "ci=$ci rt=FS_FAILOVER st=resposta-final code=$(<reply>rs) reason=$(<reply>rr) du=$du\n");
+
+    # Não houve resposta SIP do destino: indisponibilidade real do nó.
+    if (t_check_status("408")) {
+        lb_disable_dst();
+        xlog("L_WARN",
+             "ci=$ci rt=FS_FAILOVER st=lb-disable-dst motivo=timeout du=$du\n");
+
+    # O FreeSWITCH respondeu, mas recusou por atingir o limite de chamadas.
+    # Não desabilite o nó: apenas tente o próximo candidato do pool.
+    } else if (t_check_status("503") &&
+               $(<reply>rr) == "Maximum Calls In Progress") {
+        xlog("L_WARN",
+             "ci=$ci rt=FS_FAILOVER st=no-saturado motivo=max-calls du=$du\n");
+
+    } else {
+        xlog("L_DBG",
+             "ci=$ci rt=FS_FAILOVER st=sem-retry motivo=resposta-de-negocio code=$(<reply>rs)\n");
+        exit;
+    }
+
+    if (lb_next()) {
+        xlog("L_WARN",
+             "ci=$ci rt=FS_FAILOVER st=retry du=$du apos=$(<reply>rs)\n");
+        t_on_branch("LOG_BRANCH");
+        t_on_reply("LOG_REPLY");
+        t_on_failure("FS_FAILOVER");
+        route(RELAY);
+        exit;
+    }
+
+    xlog("L_WARN", "ci=$ci rt=FS_FAILOVER st=pool-esgotado grupo=1\n");
+}
+
+failure_route[REG_FAILOVER] {
+    if (t_was_cancelled()) {
+        exit;
+    }
+
+    # 401/407 são o desafio digest: devem seguir para o device.
+    if (t_check_status("40[17]")) {
+        xlog("L_DBG",
+             "ci=$ci rt=REG_FAILOVER st=desafio-digest code=$(<reply>rs) fu=$fU\n");
+        exit;
+    }
+
+    # Só troca de nó em indisponibilidade real.
+    if (!t_check_status("408|5[0-9][0-9]")) {
+        xlog("L_DBG",
+             "ci=$ci rt=REG_FAILOVER st=sem-retry code=$(<reply>rs) fu=$fU\n");
+        exit;
+    }
+
+    xlog("L_WARN",
+         "ci=$ci rt=REG_FAILOVER st=falha code=$(<reply>rs) reason=$(<reply>rr) du=$du fu=$fU\n");
+
+    if (ds_next_dst()) {
+        xlog("L_WARN", "ci=$ci rt=REG_FAILOVER st=retry du=$du fu=$fU\n");
+        t_on_branch("LOG_BRANCH");
+        t_on_reply("LOG_REPLY");
+        t_on_failure("REG_FAILOVER");
+        t_relay();
+        exit;
+    }
+
+    xlog("L_WARN", "ci=$ci rt=REG_FAILOVER st=pool-esgotado setid=2 fu=$fU\n");
+}
+
+failure_route[REG_NODE_FAILOVER] {
+    if (t_was_cancelled()) {
+        exit;
+    }
+
+    if (t_check_status("40[17]")) {
+        xlog("L_DBG",
+             "ci=$ci rt=REG_NODE_FAILOVER st=desafio-digest code=$(<reply>rs)\n");
+        exit;
+    }
+
+    if (!t_check_status("408|5[0-9][0-9]")) {
+        xlog("L_DBG",
+             "ci=$ci rt=REG_NODE_FAILOVER st=sem-retry code=$(<reply>rs)\n");
+        exit;
+    }
+
+    xlog("L_WARN",
+         "ci=$ci rt=REG_NODE_FAILOVER st=falha code=$(<reply>rs) reason=$(<reply>rr) du=$du\n");
+
+    if (ds_next_dst()) {
+        xlog("L_WARN", "ci=$ci rt=REG_NODE_FAILOVER st=retry du=$du\n");
+        t_on_branch("LOG_BRANCH");
+        t_on_reply("LOG_REPLY");
+        t_on_failure("REG_NODE_FAILOVER");
+        route(RELAY);
+        exit;
+    }
+
+    xlog("L_WARN", "ci=$ci rt=REG_NODE_FAILOVER st=pool-esgotado setid=2\n");
+}
+
+onreply_route {
+    if (nat_uac_test("private-contact")) {
+        fix_nated_contact();
+        xlog("L_DBG", "ci=$ci rt=REPLY st=fix-nated-contact code=$rs ct=$ct\n");
+    }
+}

@@ -102,7 +102,7 @@ Consequências para o teste:
 | `scenarios/uac-did.xml.in` | Modelo do cenário SIPp: INVITE -> 200 -> ACK -> RTP opcional -> BYE |
 | `loadtest.conf.example` | Configuração comentada (copiar para `loadtest.conf`) |
 | `dids.txt.example` | Formato do arquivo de DIDs e consulta para exportá-los do banco |
-| `lab/` | Laboratório STFC em Docker para validar o script sem tocar na produção: banco (Percona XtraDB Cluster 8.4.10 + keepalived) e web (nginx 1.22.1 + PHP-FPM 7.3.33) reais, OpenSIPS/FreeSWITCH simulados e Zabbix 7.4, com acesso pelo macOS (veja `lab/README.md`) |
+| `lab/` | Laboratório STFC em Docker para validar o script sem tocar na produção: banco (Percona XtraDB Cluster 8.4.10 + keepalived), web (nginx 1.22.1 + PHP-FPM 7.3.33), OpenSIPS 3.6 e FreeSWITCH 1.11.3 reais com os scripts do Flux, Zabbix 7.4, acesso pelo macOS e registro de SIP devices (veja `lab/README.md`) |
 
 ## 3. Requisitos
 

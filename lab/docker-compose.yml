@@ -31,31 +31,60 @@ volumes:
   # Historico do Zabbix sobrevive ao "lab.sh down" (apagar: lab.sh down --zabbix)
   zbx-db:
 
+# Token da SignalWire para os pacotes do FreeSWITCH: entra so no build (secret do BuildKit)
+secrets:
+  signalwire_token:
+    file: ${LAB_SIGNALWIRE_TOKEN_FILE:-${HOME}/.config/flux-lab/signalwire.token}
+
 services:
+  # SBC real (padrao): OpenSIPS 3.6 + FreeSWITCH 1.11.3 com os scripts do Flux (LAB_FLUX_SRC).
+  # LAB_SBC_TARGET=sbc volta ao SBC simulado com SIPp (sem token e sem o repositorio sbc).
   sbc-stfc-1:
-    build: { context: images, target: sbc }
-    image: flux-stfc-lab/sbc
+    build:
+      context: images
+      target: ${LAB_SBC_TARGET:-sbc-real}
+      secrets: [signalwire_token]
+    image: flux-stfc-lab/${LAB_SBC_TARGET:-sbc-real}
     hostname: sbc-stfc-1
     env_file: .env
     environment:
       LAB_SIP_ROLES: "opensips fs"
       LAB_PUB_IP: 172.30.177.163
+      LAB_INT_IP: 172.30.4.163
+      LAB_RTP_START: ${LAB_RTP1_START:-16384}
+      LAB_RTP_END: ${LAB_RTP1_END:-16583}
+      LAB_MAC_SIP_PORT: ${LAB_PORT_SIP:-5060}
+    volumes:
+      - ${LAB_FLUX_SRC:-${HOME}/Desenvolvedor/Flux/Repositorio/dpxdan/sbc}:/opt/flux-src:ro
     ports:
       - "127.0.0.1:${LAB_PORT_SSH_SBC1:-22163}:22"
+      # SIP dos devices do macOS -> socket 5062 do OpenSIPS (anuncia 127.0.0.1:LAB_PORT_SIP)
+      - "127.0.0.1:${LAB_PORT_SIP:-5060}:5062/udp"
+      # RTP do FreeSWITCH deste no (mesma faixa dentro e fora)
+      - "127.0.0.1:${LAB_RTP1_START:-16384}-${LAB_RTP1_END:-16583}:${LAB_RTP1_START:-16384}-${LAB_RTP1_END:-16583}/udp"
     networks:
       stfc_int: { ipv4_address: 172.30.4.163 }
       stfc_pub: { ipv4_address: 172.30.177.163 }
 
   sbc-stfc-02:
-    build: { context: images, target: sbc }
-    image: flux-stfc-lab/sbc
+    build:
+      context: images
+      target: ${LAB_SBC_TARGET:-sbc-real}
+      secrets: [signalwire_token]
+    image: flux-stfc-lab/${LAB_SBC_TARGET:-sbc-real}
     hostname: sbc-stfc-02
     env_file: .env
     environment:
       LAB_SIP_ROLES: "fs"
       LAB_PUB_IP: 172.30.177.162
+      LAB_INT_IP: 172.30.4.162
+      LAB_RTP_START: ${LAB_RTP2_START:-16584}
+      LAB_RTP_END: ${LAB_RTP2_END:-16783}
+    volumes:
+      - ${LAB_FLUX_SRC:-${HOME}/Desenvolvedor/Flux/Repositorio/dpxdan/sbc}:/opt/flux-src:ro
     ports:
       - "127.0.0.1:${LAB_PORT_SSH_SBC2:-22162}:22"
+      - "127.0.0.1:${LAB_RTP2_START:-16584}-${LAB_RTP2_END:-16783}:${LAB_RTP2_START:-16584}-${LAB_RTP2_END:-16783}/udp"
     networks:
       stfc_int: { ipv4_address: 172.30.4.162 }
       stfc_pub: { ipv4_address: 172.30.177.162 }

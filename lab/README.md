@@ -1,17 +1,18 @@
 # Laboratório STFC em Docker
 
-Réplica leve do ambiente STFC para validar o `flux-loadtest` sem tocar na produção.
-Seis containers Debian 12 com os mesmos nomes, papéis e finais de IP dos servidores
-reais. O banco e a web são reais e na mesma versão; o OpenSIPS e os FreeSWITCH são
-simulados com SIPp. Um Zabbix 7.4 (server, web e PostgreSQL) recebe as amostras dos
-testes, e a interface web, o Zabbix e o SSH dos servidores ficam acessíveis pelo macOS.
+Réplica do ambiente STFC para validar o `flux-loadtest` sem tocar na produção. Seis
+containers Debian 12 com os mesmos nomes, papéis e finais de IP dos servidores reais:
+OpenSIPS 3.6 e FreeSWITCH 1.11.3 reais com os scripts do Flux (PHP do `xml_curl`, Lua do
+dialplan, schema do banco), Percona XtraDB Cluster 8.4.10, nginx + PHP-FPM 7.3 e a VM de
+teste. Um Zabbix 7.4 recebe as amostras dos testes. Pelo macOS dá para acessar a
+interface web, o Zabbix e o SSH dos servidores, e registrar SIP devices (softphones).
 
 ## Topologia
 
 | Container (hostname) | Rede interna 172.30.4.0/24 | Rede "pública" 172.30.177.0/24 | O que roda |
 |---|---|---|---|
-| `sbc-stfc-1` | .163 | .163 | "OpenSIPS" :5060 e "FreeSWITCH" :5070 simulados; `fs_cli` e `opensips-cli` simulados |
-| `sbc-stfc-02` | .162 | .162 | "FreeSWITCH" :5070 simulado |
+| `sbc-stfc-1` | .163 | .163 | OpenSIPS 3.6.9 (5060, 5065 e 5062 para o macOS) + FreeSWITCH 1.11.3 (perfis `default` 5070 e `lab-mac` 5080 no IP interno) |
+| `sbc-stfc-02` | .162 | .162 | FreeSWITCH 1.11.3 (perfis `default` 5070 e `lab-mac` 5080) |
 | `banco-master-sbc-stfc` | .161 | .161 | Percona XtraDB Cluster 8.4.10-10 + keepalived (VIP .100, prioridade 150) |
 | `banco-slave-stfc` | .164 | .164 | Percona XtraDB Cluster 8.4.10-10 + keepalived (prioridade 100) |
 | `sbc-stfc-interfaceweb` | .165 | .165 | nginx 1.22.1 + PHP-FPM 7.3.33; página PHP com sessão no banco pelo VIP |
@@ -36,6 +37,76 @@ Todos os servidores têm o sshd e os usuários `loadtest` e `admin` (com sudo), 
 senhas aleatórias geradas no `.env`. O `loadtest` pode rodar `fs_cli` e
 `opensips-cli` com `sudo -n`, como no sudoers sugerido para a produção.
 
+## Requisitos do SBC real
+
+| Item | Onde | Padrão |
+|---|---|---|
+| Token da SignalWire (pacotes do FreeSWITCH, como o `FS_TOKEN` do `flux_install.sh`) | arquivo 0600 fora do repositório; `LAB_SIGNALWIRE_TOKEN_FILE` no `.env` | `~/.config/flux-lab/signalwire.token` |
+| Clone do repositório `sbc` (scripts do FreeSWITCH, schema e migrações) | `LAB_FLUX_SRC` no `.env`, montado só leitura em `/opt/flux-src` | `~/Desenvolvedor/Flux/Repositorio/dpxdan/sbc` |
+
+O token entra só no build, como secret do BuildKit: o `auth.conf` do apt é criado e
+apagado no mesmo passo e nenhuma camada da imagem o guarda. Para voltar ao SBC
+simulado com SIPp (sem token e sem o repositório `sbc`), use `LAB_SBC_TARGET=sbc` no `.env`.
+
+Na primeira subida, o `lab.sh flux` carrega no cluster o schema do Flux como o
+`install_database` do instalador (`flux-6.4.sql`, `flux-tables.sql`, `flux-6.4.1.sql`,
+`flux-views.sql`, ring group, português e as migrações de `database/updates` em ordem de
+data, com `-f`). Depois grava, sempre:
+
+| Dado | Valor |
+|---|---|
+| `fluxuser` | `172.30.%`, `127.0.0.1` e `localhost` (os triggers usam `DEFINER fluxuser@127.0.0.1`), senha `LAB_FLUX_DB_PASSWORD` |
+| `system` | `opensips = 0` e `opensips_domain = 172.30.4.163` no grupo `opensips` (ACL `default` e `event` do FreeSWITCH) |
+| Conta de teste | id 2 do schema (`4727985745`): sem limite de canais e com limite de crédito alto |
+| Ramais | `LAB_SIP_DEVICES` (padrão 20) a partir de 1000, senhas aleatórias em `out/sip_devices.csv`; ramal 1999 para os DIDs do teste |
+| DIDs | `LAB_DIDS` (padrão 100 mil) `55519xxxxxxxx` -> ramal 1999; um DID `5511300` + ramal por ramal do macOS |
+| Perfis SIP | `default` na porta 5070; `lab-mac` (cópia do `default`, porta 5080, `ext-rtp-ip` 127.0.0.1) |
+| OpenSIPS (criado pelo `sbc-stfc-1`) | tabelas do pacote `opensips-mysql-dbschema`; `address` grupo 10 = vm-teste, grupo 20 = FS; `load_balancer` grupo 1 -> FS :5070 com `channels=fs://...:8021`; `dispatcher` setid 2 -> FS :5080 |
+
+## SIP devices no macOS
+
+```bash
+./lab.sh devices
+```
+
+Configuração do softphone (Zoiper, Linphone, MicroSIP...):
+
+| Campo | Valor |
+|---|---|
+| Servidor / domínio | `127.0.0.1`, porta `5060` (`LAB_PORT_SIP`), UDP |
+| Usuário e usuário de autenticação | `1000` a `1019` |
+| Senha | coluna `senha` do `./lab.sh devices` |
+| Codecs | PCMA, PCMU |
+
+Caminho do REGISTER, igual ao de produção a partir do OpenSIPS:
+
+```
+softphone -> 127.0.0.1:5060 -> OpenSIPS :5062 (anuncia 127.0.0.1:5060) -> mid_registrar
+         -> dispatcher setid 2 (hash do usuário) -> FreeSWITCH :5080 (perfil lab-mac)
+         -> PHP xml_curl (sip_devices) -> desafio digest -> 200 OK
+```
+
+- **Socket 5062 `as 127.0.0.1:5060`:** Via, Record-Route e Contact apontam para um
+  endereço que o Mac alcança. A vm-teste continua usando o 5060 do IP "público".
+- **Perfil `lab-mac`:** anuncia o RTP em 127.0.0.1. As faixas de RTP de cada FreeSWITCH
+  são publicadas 1:1 no Mac (`LAB_RTP1_*` 16384-16583 e `LAB_RTP2_*` 16584-16783), o que
+  limita o laboratório a cerca de 100 chamadas com mídia por nó.
+- **Ramal registrado em um nó só:** o dispatcher fixa o ramal num FreeSWITCH (hash do
+  usuário), como em produção. Uma chamada que caia no outro nó não encontra o registro.
+
+Teste de registro sem softphone, com o SIPp do Mac (REGISTER, digest, 15 s registrado,
+`Expires: 0`):
+
+```bash
+sipp -sf lab/sip/register.xml -inf lab/out/sip_devices.sipp.csv -m 1 -i 127.0.0.1 127.0.0.1:5060
+```
+
+Conferir o registro:
+
+```bash
+docker compose -p flux-stfc-lab exec sbc-stfc-1 opensips-cli -x mi ul_dump
+```
+
 ## Acesso pelo macOS
 
 O Docker Desktop não roteia do Mac para os IPs dos containers: as portas abaixo são
@@ -47,6 +118,8 @@ publicadas só em `127.0.0.1` e podem ser trocadas no `.env` (`LAB_PORT_*`). O
 | Interface web (nginx + PHP-FPM) | `https://127.0.0.1:8443/` (certificado autoassinado), `http://127.0.0.1:8081/` | `LAB_PORT_WEB_HTTPS`, `LAB_PORT_WEB_HTTP` |
 | Zabbix (frontend e API) | `http://127.0.0.1:8080/` (usuário `Admin`, senha em `out/zabbix_admin.pass`) | `LAB_PORT_ZABBIX_WEB` |
 | Zabbix trapper | `127.0.0.1:10051` | `LAB_PORT_ZABBIX_TRAPPER` |
+| SIP devices | `127.0.0.1:5060/udp` | `LAB_PORT_SIP` |
+| RTP do FreeSWITCH | `127.0.0.1:16384-16783/udp` | `LAB_RTP1_START`..`LAB_RTP2_END` |
 | SSH `sbc-stfc-1` / `sbc-stfc-02` | `127.0.0.1:22163` / `:22162` | `LAB_PORT_SSH_SBC1` / `_SBC2` |
 | SSH `banco-master-sbc-stfc` / `banco-slave-stfc` | `127.0.0.1:22161` / `:22164` | `LAB_PORT_SSH_DB1` / `_DB2` |
 | SSH `sbc-stfc-interfaceweb` | `127.0.0.1:22165` | `LAB_PORT_SSH_WEB` |
@@ -85,8 +158,24 @@ O histórico fica no volume `zbx-db` e sobrevive ao `down`; para apagar, use
 | Percona XtraDB Cluster 8.4.10 (2 nós, SST, quórum) + keepalived | Real. Diferença: `pxc-encrypt-cluster-traffic=OFF` |
 | nginx 1.22.1, PHP-FPM 7.3.33 (`stub_status`, `/fpm-status`) | Real |
 | Sessão do CodeIgniter | Simulada pela `index.php`: grava em `flux.ci_sessions` como o CI |
-| OpenSIPS e FreeSWITCH | **Simulados** com SIPp (processos com o nome `opensips` e `freeswitch`). Atendem como a caixa postal; não há `load_balancer`, dialplan nem RTP de volta |
-| `fs_cli` / `opensips-cli` | Simulados. O `fs_cli` exige a senha do event socket; os números (chamadas, sessões) vêm do SIPp |
+| OpenSIPS 3.6.9 | Real, com o `opensips.cfg` de produção (`sbc01`): `mid_registrar`, `load_balancer` com estatísticas do FreeSWITCH, `dispatcher`, `permissions`, `tracer` |
+| FreeSWITCH 1.11.3 | Real (pacotes SignalWire), com `autoload_configs`, `vars.xml`, PHP do `xml_curl` e Lua do dialplan do repositório `sbc` |
+| `fs_cli` / `opensips-cli` | Reais |
+| SBC simulado (`LAB_SBC_TARGET=sbc`) | SIPp com os nomes `opensips` e `freeswitch`, `fs_cli` e `opensips-cli` simulados (versão anterior do laboratório) |
+
+### Diferenças do SBC real em relação a produção
+
+| Item | Laboratório | Motivo |
+|---|---|---|
+| Perfil `lab-mac` (5080) e socket 5062 do OpenSIPS | Só no laboratório | Mídia e sinalização alcançáveis pelo macOS (Docker Desktop não roteia para os IPs dos containers) |
+| `dispatcher` setid 2 | Aponta para o 5080 | Registros dos devices no perfil `lab-mac` |
+| `system.opensips*` | Grupo `opensips` | No schema 6.4 estão em `signup`, e o PHP só lê `global`, `opensips`...; sem isso a ACL não libera o OpenSIPS. Conferir na base de produção |
+| `pxc_strict_mode` | `PERMISSIVE`, `sql_mode=""` | Seis tabelas do Flux (`cdrs`, `cdrs_staging`, `reseller_cdrs`...) não têm chave primária e o modo `ENFORCING` recusa gravar nelas. Conferir no PXC de produção |
+| Driver ODBC | MariaDB (`odbc-mariadb`) | O instalador copia o `libmyodbc8` de um pacote local |
+| `mod_bcg729`, `mod_h26x` | Fora do `modules.conf.xml` | Sem pacote para bookworm no repositório SignalWire (codecs, sem efeito no teste) |
+| OpenSIPS | 3.6.9 | Versão atual do repositório 3.6 (produção: 3.6.8) |
+| Event socket | `0.0.0.0` com ACL `event` | O container não tem IPv6 |
+| Logs | `/var/log/opensips.log`, `/var/log/freeswitch/freeswitch.log` | Sem syslog no container |
 | Zabbix 7.4.15 (imagens oficiais `ubuntu-7.4.15`) + PostgreSQL 17 | Real |
 
 O laboratório serve para validar o script (chaves SSH, coleta, limites, relatório,
@@ -199,6 +288,24 @@ O relatório fica em `out/results/` (no Mac) e em `/var/lib/flux-loadtest/result
 | `smoke` (`rtp` e `none`) | 1/1 |
 | `run -t sip,web -r 20 -H 10 -w 60` | 1053 chamadas sem falha (pico de 244 simultâneas); estático ~11,7 mil req/s; PHP ~290 req/s com ~600 consultas/s no banco pelo VIP; **1 sessão criada** para todas as requisições PHP |
 | Falha do master durante o `run` | `cluster_size=1` detectado; teste interrompido de forma suave em 3 amostras; VIP migrou para o slave; 554 chamadas sem falha |
+
+## Validação do SBC real (2026-10-14)
+
+| Teste | Resultado |
+|---|---|
+| Build com o token como secret | FreeSWITCH 1.11.3, OpenSIPS 3.6.9, PHP 7.3.33, ODBC MariaDB; nenhum `auth.conf` na imagem |
+| Schema do Flux | 158 tabelas, sem erros; 100 mil DIDs e 20 ramais gravados |
+| FreeSWITCH | Perfis `default` e `lab-mac` gerados pelo PHP a partir de `sip_profiles`; ACL `default`/`event` com o OpenSIPS |
+| OpenSIPS | `load_balancer` com `max` vindo do event socket dos dois FS; `dispatcher` com os dois nós ativos |
+| REGISTER do macOS (SIPp, ramal 1000) | 401 -> digest -> 200 OK; contato no `ul_dump` do OpenSIPS e `Registered(AUTO-NAT)` no FS escolhido pelo hash |
+| `check` do flux-loadtest | `fs_cli` e `opensips-cli` reais respondendo |
+| Chamada para DID (`smoke`) | Passa por OpenSIPS -> `load_balancer` -> FS -> dialplan Lua (DID local, conta 2); termina em **480** porque o ramal 1999 não está registrado (ver abaixo) |
+
+**DID para ramal não registrado:** neste fork (`dpxdan/sbc`), o DID local para um ramal
+não registrado faz `bridge` -> `USER_NOT_REGISTERED` -> `flux-sipdevice-routing.lua` e
+desliga com 480. No snapshot de produção (`sbc01`, 15/09), `lib/addons/sip_routing.lua`
+chama `leave_voicemail` e a chamada cai na caixa postal, que é o caminho previsto no
+README (seção 6.6) para o teste de carga.
 
 ## Validação do Zabbix (2026-10-14)
 

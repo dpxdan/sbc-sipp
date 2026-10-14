@@ -1784,7 +1784,7 @@ cmd_check() {
         case "${role}" in
             # max-sessions / sessions-per-second limitam o teste (padrao do repo: 1000 / 30 por no)
             fs)       cmd="$(fs_prelude)"$'\n'"fsx status | grep -E 'is ready|session\\(s\\) - peak|per Sec|session\\(s\\) max|idle cpu|rror|uth'; df -P $(printf '%q' "${CFG[FS_DISK_PATH]}") | tail -1" ;;
-            opensips) cmd="${CFG[OPENSIPS_MI_CMD]} get_statistics dialog:active_dialogs; ${CFG[OPENSIPS_MI_CMD]} lb_list | head -20" ;;
+            opensips) cmd="${CFG[OPENSIPS_MI_CMD]} get_statistics active_dialogs; ${CFG[OPENSIPS_MI_CMD]} lb_list | head -20" ;;
             db)       cmd="${CFG[MYSQL_CLI_CMD]} -N -e 'SELECT @@hostname, @@version, @@read_only'"
                       cmd+="; ${CFG[MYSQL_CLI_CMD]} -N -e \"SHOW GLOBAL STATUS WHERE Variable_name IN ('wsrep_cluster_size','wsrep_cluster_status','wsrep_local_state_comment','wsrep_ready')\""
                       cmd+="; ${CFG[MYSQL_CLI_CMD]} -e 'SHOW REPLICA STATUS\G' | grep -E 'Source_Host|Running:|Seconds_Behind' || echo 'sem replicacao assincrona (normal em Percona XtraDB Cluster)'"

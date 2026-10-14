@@ -22,7 +22,11 @@ wsrep_cluster_address=gcomm://172.30.4.161,172.30.4.164
 wsrep_node_address=@NODE_ADDR@
 wsrep_node_name=@NODE_NAME@
 wsrep_sst_method=xtrabackup-v2
-pxc_strict_mode=ENFORCING
+# Schema do Flux: cdrs, cdrs_staging, reseller_cdrs, q850code, sip_device_routing e
+# automated_report_log nao tem chave primaria; ENFORCING recusa DML nelas (CDR nao grava).
+# sql_mode vazio como no mysqld.cnf de producao (o Flux depende de datas '0000-00-00').
+pxc_strict_mode=PERMISSIVE
+sql_mode=""
 # Diferenca para producao: sem criptografia do trafego do cluster, porque os
 # certificados gerados em cada container sao diferentes.
 pxc-encrypt-cluster-traffic=OFF
