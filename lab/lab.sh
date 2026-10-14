@@ -82,6 +82,8 @@ ensure_env() {
     env_add LAB_FLUX_DB_PASSWORD "$(rand)"
     # clone do repositorio sbc (scripts do Flux) e token da SignalWire (fora do repositorio)
     env_add LAB_FLUX_SRC "${HOME}/Desenvolvedor/Flux/Repositorio/dpxdan/sbc"
+    # scripts Lua do FreeSWITCH: snapshot de producao (sbc01); o fork nao cai na caixa postal
+    env_add LAB_FLUX_SCRIPTS "${HOME}/Desenvolvedor/Flux/Servidores/flux-sbcbr/sbc01/freeswitch/scripts"
     env_add LAB_SIGNALWIRE_TOKEN_FILE "${HOME}/.config/flux-lab/signalwire.token"
     env_add LAB_SIP_DEVICES 20
     env_add LAB_DIDS 100000
@@ -236,6 +238,10 @@ check_real_sbc() {
     tok=$(env_get LAB_SIGNALWIRE_TOKEN_FILE)
     [[ -f ${src}/database/flux-6.4.sql && -d ${src}/freeswitch/scripts/flux ]] \
         || die "LAB_FLUX_SRC nao e um clone do repositorio sbc: ${src} (ajuste no ${ENV_FILE})"
+    local scripts
+    scripts=$(env_get LAB_FLUX_SCRIPTS)
+    [[ -f ${scripts}/flux/flux.lua ]] \
+        || die "LAB_FLUX_SCRIPTS sem flux/flux.lua: ${scripts} (diretorio scripts do FreeSWITCH)"
     [[ -s ${tok} ]] || die "token da SignalWire ausente: ${tok} (LAB_SIGNALWIRE_TOKEN_FILE no ${ENV_FILE})"
     if [[ $(stat -f '%Lp' "${tok}" 2>/dev/null || stat -c '%a' "${tok}") != 600 ]]; then
         warn "${tok} deveria ter permissao 0600"

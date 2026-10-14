@@ -56,6 +56,8 @@ services:
       LAB_MAC_SIP_PORT: ${LAB_PORT_SIP:-5060}
     volumes:
       - ${LAB_FLUX_SRC:-${HOME}/Desenvolvedor/Flux/Repositorio/dpxdan/sbc}:/opt/flux-src:ro
+      # scripts Lua do FreeSWITCH (padrao: snapshot de producao do sbc01)
+      - ${LAB_FLUX_SCRIPTS:-${HOME}/Desenvolvedor/Flux/Servidores/flux-sbcbr/sbc01/freeswitch/scripts}:/opt/flux-scripts:ro
     ports:
       - "127.0.0.1:${LAB_PORT_SSH_SBC1:-22163}:22"
       # SIP dos devices do macOS -> socket 5062 do OpenSIPS (anuncia 127.0.0.1:LAB_PORT_SIP)
@@ -82,6 +84,8 @@ services:
       LAB_RTP_END: ${LAB_RTP2_END:-16783}
     volumes:
       - ${LAB_FLUX_SRC:-${HOME}/Desenvolvedor/Flux/Repositorio/dpxdan/sbc}:/opt/flux-src:ro
+      # scripts Lua do FreeSWITCH (padrao: snapshot de producao do sbc01)
+      - ${LAB_FLUX_SCRIPTS:-${HOME}/Desenvolvedor/Flux/Servidores/flux-sbcbr/sbc01/freeswitch/scripts}:/opt/flux-scripts:ro
     ports:
       - "127.0.0.1:${LAB_PORT_SSH_SBC2:-22162}:22"
       - "127.0.0.1:${LAB_RTP2_START:-16584}-${LAB_RTP2_END:-16783}:${LAB_RTP2_START:-16584}-${LAB_RTP2_END:-16783}/udp"

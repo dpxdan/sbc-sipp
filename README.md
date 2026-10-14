@@ -385,6 +385,12 @@ liberado só para 127.0.0.1.
 
 ### 6.6 DIDs de teste
 
+> **Atenção (2026-10-14):** no laboratório, com os scripts Lua do `sbc01` (15/09), o DID
+> para ramal não registrado termina em 480 e não chega à caixa postal: o
+> `flux-sipdevice-routing.lua` desliga a chamada antes do `leave_voicemail` (detalhes em
+> `lab/README.md`, "Validação do SBC real"). Confirme com um `smoke` em produção antes de
+> montar a massa de DIDs.
+
 Cada DID do `DID_FILE` precisa:
 
 - ser do tipo DID-LOCAL (`call_type = 0`);

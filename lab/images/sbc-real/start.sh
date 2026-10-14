@@ -5,7 +5,9 @@
 #               xml_curl (diretorio e sofia.conf) no PHP-FPM 7.3 + nginx em 127.0.0.1:8735,
 #               dialplan em Lua com ODBC (DSN FLUX) e CDR por json_cdr
 #   opensips -> OpenSIPS 3.6 com o opensips.cfg de producao (mid_registrar + load_balancer)
-# Os scripts do Flux vem do clone do repositorio sbc montado em /opt/flux-src (somente leitura).
+# Schema, PHP do xml_curl e configs vem do clone do repositorio sbc em /opt/flux-src; os scripts
+# Lua do dialplan vem de /opt/flux-scripts (LAB_FLUX_SCRIPTS, padrao: snapshot do sbc01 de
+# producao), com fallback para os do clone. Ambos somente leitura.
 # O banco (schema Flux, usuario fluxuser e dados do laboratorio) e preparado pelo lab.sh no
 # Percona XtraDB Cluster; este script espera o schema antes de subir o FreeSWITCH.
 
@@ -25,6 +27,7 @@ LAB_MAC_SIP_PORT=${LAB_MAC_SIP_PORT:-5060}
 LAB_OPENSIPS_LOG_LEVEL=${LAB_OPENSIPS_LOG_LEVEL:-3}
 
 readonly FLUX_SRC=/opt/flux-src
+readonly FLUX_SCRIPTS=/opt/flux-scripts
 readonly VIP=172.30.4.100
 readonly FS_CONF=/etc/freeswitch
 
@@ -79,8 +82,13 @@ CHARSET  = utf8
 EOF
 
     ln -sfn "${FLUX_SRC}/freeswitch/fs" /var/www/html/fs
+    local scripts="${FLUX_SRC}/freeswitch/scripts"
+    if [[ -f ${FLUX_SCRIPTS}/flux/flux.lua ]]; then
+        scripts=${FLUX_SCRIPTS}
+    fi
     rm -rf /usr/share/freeswitch/scripts
-    ln -sfn "${FLUX_SRC}/freeswitch/scripts" /usr/share/freeswitch/scripts
+    ln -sfn "${scripts}" /usr/share/freeswitch/scripts
+    log "scripts Lua do dialplan: $([[ ${scripts} == "${FLUX_SCRIPTS}" ]] && echo 'LAB_FLUX_SCRIPTS' || echo 'clone do repositorio sbc') (${scripts})"
     cp -f "${FLUX_SRC}/web_interface/nginx/deb_fs.conf" /etc/nginx/conf.d/fs.conf
     # sem IPv6 no container
     sed -i '/listen \[::1\]:8735/d' /etc/nginx/conf.d/fs.conf

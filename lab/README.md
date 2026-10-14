@@ -42,7 +42,8 @@ senhas aleatórias geradas no `.env`. O `loadtest` pode rodar `fs_cli` e
 | Item | Onde | Padrão |
 |---|---|---|
 | Token da SignalWire (pacotes do FreeSWITCH, como o `FS_TOKEN` do `flux_install.sh`) | arquivo 0600 fora do repositório; `LAB_SIGNALWIRE_TOKEN_FILE` no `.env` | `~/.config/flux-lab/signalwire.token` |
-| Clone do repositório `sbc` (scripts do FreeSWITCH, schema e migrações) | `LAB_FLUX_SRC` no `.env`, montado só leitura em `/opt/flux-src` | `~/Desenvolvedor/Flux/Repositorio/dpxdan/sbc` |
+| Clone do repositório `sbc` (schema, migrações, PHP do `xml_curl`, `autoload_configs`, `vars.xml`) | `LAB_FLUX_SRC` no `.env`, montado só leitura em `/opt/flux-src` | `~/Desenvolvedor/Flux/Repositorio/dpxdan/sbc` |
+| Scripts Lua do dialplan (diretório `scripts` do FreeSWITCH) | `LAB_FLUX_SCRIPTS` no `.env`, montado só leitura em `/opt/flux-scripts`; sem `flux/flux.lua`, usa os do clone | snapshot de produção `~/Desenvolvedor/Flux/Servidores/flux-sbcbr/sbc01/freeswitch/scripts` |
 
 O token entra só no build, como secret do BuildKit: o `auth.conf` do apt é criado e
 apagado no mesmo passo e nenhuma camada da imagem o guarda. Para voltar ao SBC
@@ -299,13 +300,16 @@ O relatório fica em `out/results/` (no Mac) e em `/var/lib/flux-loadtest/result
 | OpenSIPS | `load_balancer` com `max` vindo do event socket dos dois FS; `dispatcher` com os dois nós ativos |
 | REGISTER do macOS (SIPp, ramal 1000) | 401 -> digest -> 200 OK; contato no `ul_dump` do OpenSIPS e `Registered(AUTO-NAT)` no FS escolhido pelo hash |
 | `check` do flux-loadtest | `fs_cli` e `opensips-cli` reais respondendo |
-| Chamada para DID (`smoke`) | Passa por OpenSIPS -> `load_balancer` -> FS -> dialplan Lua (DID local, conta 2); termina em **480** porque o ramal 1999 não está registrado (ver abaixo) |
+| Chamada para DID (`smoke`), scripts do `sbc01` | Passa por OpenSIPS -> `load_balancer` -> FS -> dialplan Lua (DID local, conta 2); termina em **480** porque o ramal 1999 não está registrado (ver abaixo) |
 
-**DID para ramal não registrado:** neste fork (`dpxdan/sbc`), o DID local para um ramal
-não registrado faz `bridge` -> `USER_NOT_REGISTERED` -> `flux-sipdevice-routing.lua` e
-desliga com 480. No snapshot de produção (`sbc01`, 15/09), `lib/addons/sip_routing.lua`
-chama `leave_voicemail` e a chamada cai na caixa postal, que é o caminho previsto no
-README (seção 6.6) para o teste de carga.
+**DID para ramal não registrado não cai na caixa postal.** Nos scripts do `sbc01`
+(15/09) e do fork, o XML gerado para DID local (`custom_inbound_0` em
+`lib/addons/sip_routing.lua`) tem, nesta ordem: `bridge` para o ramal, `lua
+flux-sipdevice-routing.lua` (failover) e `leave_voicemail`. O
+`flux-sipdevice-routing.lua` (igual nos dois) chama `session:hangup()` sempre que o
+bridge não termina em `SUCCESS`, então o `leave_voicemail` nunca executa: o chamador
+recebe 480 (`USER_NOT_REGISTERED`). A premissa da seção 6.6 do README (ramal não
+registrado com `vm-enabled` atende pela caixa postal) não vale para esses scripts.
 
 ## Validação do Zabbix (2026-10-14)
 
