@@ -17,6 +17,10 @@ readonly LAB_DIR
 readonly ENV_FILE="${LAB_DIR}/.env"
 readonly OUT_DIR="${LAB_DIR}/out"
 readonly COMPOSE=(docker compose -f "${LAB_DIR}/docker-compose.yml" --project-directory "${LAB_DIR}")
+# Atendedor do teste de carga (SIPp UAS do flux-loadtest na vm-teste): destino dos DIDs
+# DIRECT-IP 55519xxxxxxxx. IP fixo da vm-teste no docker-compose.yml.
+readonly LAB_UAS_PORT=5090
+readonly LAB_UAS_ADDR="172.30.177.50:${LAB_UAS_PORT}"
 
 log()  { printf '[lab] %s\n' "$*"; }
 warn() { printf '[lab] AVISO: %s\n' "$*" >&2; }
@@ -82,7 +86,7 @@ ensure_env() {
     env_add LAB_FLUX_DB_PASSWORD "$(rand)"
     # clone do repositorio sbc (scripts do Flux) e token da SignalWire (fora do repositorio)
     env_add LAB_FLUX_SRC "${HOME}/Desenvolvedor/Flux/Repositorio/dpxdan/sbc"
-    # scripts Lua do FreeSWITCH: snapshot de producao (sbc01); o fork nao cai na caixa postal
+    # scripts Lua do FreeSWITCH: snapshot de producao (sbc01)
     env_add LAB_FLUX_SCRIPTS "${HOME}/Desenvolvedor/Flux/Servidores/flux-sbcbr/sbc01/freeswitch/scripts"
     env_add LAB_SIGNALWIRE_TOKEN_FILE "${HOME}/.config/flux-lab/signalwire.token"
     env_add LAB_SIP_DEVICES 20
@@ -170,6 +174,7 @@ BASELINE_SECONDS=20
 COOLDOWN_SECONDS=20
 RESULTS_DIR=/var/lib/flux-loadtest/results
 CONF
+    uas_conf >> "${OUT_DIR}/loadtest.conf"
     zabbix_conf >> "${OUT_DIR}/loadtest.conf"
     log "configuracao gerada em ${OUT_DIR}/loadtest.conf (na vm-teste: /etc/flux-loadtest/loadtest.conf)"
 }
@@ -198,8 +203,23 @@ CONF
 }
 
 # Configuracao gerada por versao anterior do lab.sh: acrescenta o bloco do Zabbix
+# SBC real: os DIDs do teste sao DIRECT-IP para o atendedor da vm-teste.
+# SBC simulado (LAB_SBC_TARGET=sbc): o proprio SIPp do sbc atende; sem atendedor.
+uas_conf() {
+    printf '\n# Atendedor na vm-teste (DIDs 55519xxxxxxxx DIRECT-IP para %s)\n' "${LAB_UAS_ADDR}"
+    if [[ $(sbc_target) == sbc-real ]]; then
+        printf 'UAS_PORT=%s\n' "${LAB_UAS_PORT}"
+    else
+        printf 'UAS_PORT=\n'
+    fi
+}
+
 migrate_conf() {
     [[ -f ${OUT_DIR}/loadtest.conf ]] || return 0
+    if ! grep -q '^UAS_PORT=' "${OUT_DIR}/loadtest.conf"; then
+        uas_conf >> "${OUT_DIR}/loadtest.conf"
+        log "UAS_PORT acrescentado a ${OUT_DIR}/loadtest.conf"
+    fi
     if ! grep -q '^ZABBIX_SERVER=' "${OUT_DIR}/loadtest.conf"; then
         zabbix_conf >> "${OUT_DIR}/loadtest.conf"
         log "bloco do Zabbix acrescentado a ${OUT_DIR}/loadtest.conf"
@@ -334,43 +354,55 @@ GRANT ALL PRIVILEGES ON flux.* TO 'fluxuser'@'localhost';
 USE flux;
 -- OpenSIPS na frente do pool: ACL "default" e "event" do FreeSWITCH (fs/lib/flux.xml.php)
 -- o PHP (fs/lib/flux.lib.php) so le group_title IN ('global','opensips',...); no schema 6.4
--- estas chaves estao em 'signup' e a ACL nao incluiria o OpenSIPS
+-- estas chaves estao em 'signup' e a ACL nao incluiria o OpenSIPS.
+-- IP publico do OpenSIPS: origem das chamadas de operadora (load_balancer) e do event socket
 UPDATE \`system\` SET value = '0', group_title = 'opensips' WHERE name = 'opensips';
-UPDATE \`system\` SET value = '172.30.4.163', group_title = 'opensips' WHERE name = 'opensips_domain';
+UPDATE \`system\` SET value = '172.30.177.163', group_title = 'opensips' WHERE name = 'opensips_domain';
 -- conta de teste (id 2 do schema, pos-paga): sem limite de canais e com credito para nao
 -- cair em NO_SUFFICIENT_FUND (o dialplan confere o saldo mesmo nas chamadas de entrada)
 UPDATE accounts SET maxchannels = 0, status = 0, deleted = 0, expiry = '2046-07-25 11:26:24',
   credit_limit = 100000000 WHERE id = 2;
--- perfil default na porta do FreeSWITCH de producao (5070): chamadas de operadora (load_balancer)
-UPDATE sip_profiles SET sip_port = '5070', status = 0 WHERE id = 1;
--- [lab] perfil dos devices do macOS (dispatcher setid 2): midia anunciada em 127.0.0.1
 DELETE FROM sip_devices WHERE username BETWEEN '1000' AND '1999' AND accountid = 2;
 SQL
+    # perfil default como em producao: operadoras (load_balancer) na porta 5070 do IP
+    # publico, com a midia no mesmo IP (pub_ip_v4 vem do vars.xml gerado pelo start.sh)
+    cat <<'SQL'
+UPDATE sip_profiles SET sip_port = '5070', sip_ip = '$${pub_ip_v4}', status = 0,
+  profile_data = JSON_SET(profile_data, '$."rtp-ip"', '$${pub_ip_v4}', '$."ext-rtp-ip"', '$${pub_ip_v4}',
+    '$."ext-sip-ip"', '$${pub_ip_v4}', '$."presence-hosts"', '$${domain},$${pub_ip_v4}')
+  WHERE id = 1;
+SQL
+    # [lab] ramais dos devices do macOS (perfil lab-mac, dispatcher setid 2)
     awk -F';' 'NR > 1 && $1 ~ /^[0-9]+$/ {
         printf "INSERT INTO sip_devices (username, sip_profile_id, reseller_id, accountid, dir_params, dir_vars, status, creation_date, last_modified_date, call_waiting) VALUES (%c%s%c, 100, 0, 2, %c{\"password\":\"%s\",\"vm-enabled\":\"true\",\"vm-password\":\"%s\",\"vm-mailto\":\"\",\"vm-attach-file\":\"false\",\"vm-keep-local-after-email\":\"true\",\"vm-email-all-messages\":\"false\"}%c, %c{\"effective_caller_id_name\":\"Lab %s\",\"effective_caller_id_number\":\"%s\"}%c, 0, NOW(), NOW(), 0);\n",
             39, $1, 39, 39, $2, substr($1, 1, 4), 39, 39, $1, $1, 39 }' "${devices}"
-    # ramal da caixa postal do teste de carga: nunca registrado, vm-enabled
-    printf "INSERT INTO sip_devices (username, sip_profile_id, reseller_id, accountid, dir_params, dir_vars, status, creation_date, last_modified_date, call_waiting) VALUES ('1999', 1, 0, 2, '{\"password\":\"%s\",\"vm-enabled\":\"true\",\"vm-password\":\"1999\",\"vm-mailto\":\"\",\"vm-attach-file\":\"false\",\"vm-keep-local-after-email\":\"true\",\"vm-email-all-messages\":\"false\"}', '{\"effective_caller_id_name\":\"Lab caixa postal\",\"effective_caller_id_number\":\"1999\"}', 0, NOW(), NOW(), 0);\n" "$(rand)"
     cat <<'SQL'
 DELETE FROM dids WHERE accountid = 2 AND (number LIKE '55519%' OR number LIKE '5511300%');
 SQL
-    # DID-LOCAL (call_type 0): 100 mil DIDs -> ramal 1999 (caixa postal), um DID por ramal do Mac
-    awk -v n="${ndids}" 'BEGIN {
+    # DIRECT-IP (call_type 2): DIDs do teste de carga -> atendedor SIPp da vm-teste. O FS faz
+    # bridge sofia/<perfil>/<DID>@<extensions> (custom_inbound_2 do flux.xml.lua)
+    awk -v n="${ndids}" -v dst="${LAB_UAS_ADDR}" 'BEGIN {
         cols = "INSERT INTO dids (number, accountid, inc, extensions, status, call_type, leg_timeout, product_id, always, always_destination, user_busy, user_busy_destination, user_not_registered, user_not_registered_destination, no_answer, no_answer_destination, failover_extensions, last_modified_date) VALUES "
         for (i = 0; i < n; i++) {
             if (i % 1000 == 0) printf "%s%s", (i ? ";\n" : ""), cols; else printf ","
-            printf "(%c55519%08d%c,2,60,%c1999%c,0,0,30,0,0,%c%c,0,%c%c,0,%c%c,0,%c%c,%c%c,NOW())", 39, i, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39
+            printf "(%c55519%08d%c,2,60,%c%s%c,0,2,30,0,0,%c%c,0,%c%c,0,%c%c,0,%c%c,%c%c,NOW())", 39, i, 39, 39, dst, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39
         }
         if (n > 0) printf ";\n"
     }'
+    # DID-LOCAL (call_type 0): um DID por ramal do macOS
     awk -F';' 'NR > 1 && $1 ~ /^[0-9]+$/ {
         printf "INSERT INTO dids (number, accountid, inc, extensions, status, call_type, leg_timeout, product_id, always, always_destination, user_busy, user_busy_destination, user_not_registered, user_not_registered_destination, no_answer, no_answer_destination, failover_extensions, last_modified_date) VALUES (%c%s%c,2,60,%c%s%c,0,0,30,0,0,%c%c,0,%c%c,0,%c%c,0,%c%c,%c%c,NOW());\n",
             39, $3, 39, 39, $1, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39 }' "${devices}"
-    # por ultimo: o start.sh do SBC espera este perfil para subir o FreeSWITCH
+    # por ultimo: o start.sh do SBC espera este perfil para subir o FreeSWITCH.
+    # [lab] perfil dos devices do macOS: IP interno (dispatcher setid 2), midia anunciada
+    # em 127.0.0.1 (portas de RTP publicadas pelo Docker Desktop)
     cat <<'SQL'
 DELETE FROM sip_profiles WHERE id = 100 OR name = 'lab-mac';
 INSERT INTO sip_profiles (id, name, sip_ip, sip_port, profile_data, created_date, last_modified_date, accountid, status)
-  SELECT 100, 'lab-mac', sip_ip, '5080', JSON_SET(profile_data, '$."ext-rtp-ip"', '127.0.0.1'), NOW(), NOW(), 0, 0
+  SELECT 100, 'lab-mac', '$${local_ip_v4}', '5080',
+    JSON_SET(profile_data, '$."rtp-ip"', '$${local_ip_v4}', '$."ext-rtp-ip"', '127.0.0.1',
+      '$."ext-sip-ip"', '$${local_ip_v4}', '$."presence-hosts"', '$${domain},$${local_ip_v4}'),
+    NOW(), NOW(), 0, 0
   FROM sip_profiles WHERE id = 1;
 SQL
 }
@@ -407,7 +439,7 @@ cmd_flux() {
     devices=$(devices_file)
     ndids=$(env_get LAB_DIDS)
     [[ ${ndids:-100000} =~ ^[0-9]+$ ]] || die "LAB_DIDS invalido"
-    log "gravando fluxuser, ramais ($(grep -c '^[0-9]' "${devices}") + caixa postal 1999), ${ndids} DIDs e perfis SIP"
+    log "gravando fluxuser, ramais ($(grep -c '^[0-9]' "${devices}")), ${ndids} DIDs DIRECT-IP para ${LAB_UAS_ADDR} e perfis SIP"
     flux_seed_sql "${devices}" "${ndids}" | root_sql || die "falha ao gravar os dados do laboratorio"
     log "banco do Flux pronto"
 }
@@ -443,7 +475,7 @@ EOF
     awk -F';' 'NR > 1 { printf "  %-8s %-17s %s\n", $1, $2, $3 }' "${f}"
     cat <<EOF
 
-  Caixa postal do teste de carga: ramal 1999 (nunca registrado), DIDs 55519xxxxxxxx.
+  Teste de carga: DIDs 55519xxxxxxxx DIRECT-IP para o atendedor da vm-teste (${LAB_UAS_ADDR}).
   Midia: RTP do FreeSWITCH em 127.0.0.1:$(port LAB_RTP1_START 16384)-$(port LAB_RTP2_END 16783)/udp.
 EOF
 }

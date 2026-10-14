@@ -11,12 +11,12 @@ interface web, o Zabbix e o SSH dos servidores, e registrar SIP devices (softpho
 
 | Container (hostname) | Rede interna 172.30.4.0/24 | Rede "pública" 172.30.177.0/24 | O que roda |
 |---|---|---|---|
-| `sbc-stfc-1` | .163 | .163 | OpenSIPS 3.6.9 (5060, 5065 e 5062 para o macOS) + FreeSWITCH 1.11.3 (perfis `default` 5070 e `lab-mac` 5080 no IP interno) |
+| `sbc-stfc-1` | .163 | .163 | OpenSIPS 3.6.9 (5060, 5065 e 5062 para o macOS) + FreeSWITCH 1.11.3 (perfil `default` 5070 no IP público, como em produção; `lab-mac` 5080 no interno) |
 | `sbc-stfc-02` | .162 | .162 | FreeSWITCH 1.11.3 (perfis `default` 5070 e `lab-mac` 5080) |
 | `banco-master-sbc-stfc` | .161 | .161 | Percona XtraDB Cluster 8.4.10-10 + keepalived (VIP .100, prioridade 150) |
 | `banco-slave-stfc` | .164 | .164 | Percona XtraDB Cluster 8.4.10-10 + keepalived (prioridade 100) |
 | `sbc-stfc-interfaceweb` | .165 | .165 | nginx 1.22.1 + PHP-FPM 7.3.33; página PHP com sessão no banco pelo VIP |
-| `vm-teste` | — | .50 | VM originadora: SIPp, wrk, sysbench; o repositório montado em `/opt/flux-loadtest` |
+| `vm-teste` | — | .50 | VM originadora: SIPp (originador e atendedor em 5090), wrk, sysbench; o repositório montado em `/opt/flux-loadtest` |
 | `zabbix-server` | — (zbx .10) | .10 | Zabbix server 7.4 (trapper 10051) |
 | `zabbix-web` | — (zbx .11) | .11 | Frontend e API do Zabbix (8080) |
 | `zabbix-db` | — (zbx .5) | — | PostgreSQL 17 do Zabbix; dados no volume `zbx-db` |
@@ -57,12 +57,13 @@ data, com `-f`). Depois grava, sempre:
 | Dado | Valor |
 |---|---|
 | `fluxuser` | `172.30.%`, `127.0.0.1` e `localhost` (os triggers usam `DEFINER fluxuser@127.0.0.1`), senha `LAB_FLUX_DB_PASSWORD` |
-| `system` | `opensips = 0` e `opensips_domain = 172.30.4.163` no grupo `opensips` (ACL `default` e `event` do FreeSWITCH) |
+| `system` | `opensips = 0` e `opensips_domain = 172.30.177.163` (IP público do OpenSIPS) no grupo `opensips` (ACL `default` e `event` do FreeSWITCH) |
 | Conta de teste | id 2 do schema (`4727985745`): sem limite de canais e com limite de crédito alto |
-| Ramais | `LAB_SIP_DEVICES` (padrão 20) a partir de 1000, senhas aleatórias em `out/sip_devices.csv`; ramal 1999 para os DIDs do teste |
-| DIDs | `LAB_DIDS` (padrão 100 mil) `55519xxxxxxxx` -> ramal 1999; um DID `5511300` + ramal por ramal do macOS |
-| Perfis SIP | `default` na porta 5070; `lab-mac` (cópia do `default`, porta 5080, `ext-rtp-ip` 127.0.0.1) |
-| OpenSIPS (criado pelo `sbc-stfc-1`) | tabelas do pacote `opensips-mysql-dbschema`; `address` grupo 10 = vm-teste, grupo 20 = FS; `load_balancer` grupo 1 -> FS :5070 com `channels=fs://...:8021`; `dispatcher` setid 2 -> FS :5080 |
+| Ramais | `LAB_SIP_DEVICES` (padrão 20) a partir de 1000, senhas aleatórias em `out/sip_devices.csv` |
+| DIDs | `LAB_DIDS` (padrão 100 mil) `55519xxxxxxxx` DIRECT-IP (`call_type = 2`) -> atendedor da vm-teste `172.30.177.50:5090`; um DID `5511300` + ramal (DID local) por ramal do macOS |
+| Perfis SIP | `default` na porta 5070 do IP público (`$${pub_ip_v4}`, definido pelo `start.sh`); `lab-mac` (cópia do `default` no IP interno `$${local_ip_v4}`, porta 5080, `ext-rtp-ip` 127.0.0.1) |
+| OpenSIPS (criado pelo `sbc-stfc-1`) | tabelas do pacote `opensips-mysql-dbschema`; `address` grupo 10 = vm-teste, grupo 20 = FS (IPs públicos e internos); `load_balancer` grupo 1 -> FS 172.30.177.x:5070 com `channels=fs://...@172.30.177.x:8021`; `dispatcher` setid 2 -> FS 172.30.4.x:5080 |
+| `loadtest.conf` | `UAS_PORT=5090`: o `flux-loadtest` sobe o atendedor na vm-teste durante a fase `sip` |
 
 ## SIP devices no macOS
 
@@ -169,6 +170,7 @@ O histórico fica no volume `zbx-db` e sobrevive ao `down`; para apagar, use
 | Item | Laboratório | Motivo |
 |---|---|---|
 | Perfil `lab-mac` (5080) e socket 5062 do OpenSIPS | Só no laboratório | Mídia e sinalização alcançáveis pelo macOS (Docker Desktop não roteia para os IPs dos containers) |
+| Atendedor na vm-teste (5090) | DIDs do teste DIRECT-IP para a própria VM originadora | Em produção, a mesma configuração (seção 6.6 do README), com o IP público da VM |
 | `dispatcher` setid 2 | Aponta para o 5080 | Registros dos devices no perfil `lab-mac` |
 | `system.opensips*` | Grupo `opensips` | No schema 6.4 estão em `signup`, e o PHP só lê `global`, `opensips`...; sem isso a ACL não libera o OpenSIPS. Conferir na base de produção |
 | `pxc_strict_mode` | `PERMISSIVE`, `sql_mode=""` | Seis tabelas do Flux (`cdrs`, `cdrs_staging`, `reseller_cdrs`...) não têm chave primária e o modo `ENFORCING` recusa gravar nelas. Conferir no PXC de produção |
@@ -265,8 +267,10 @@ O relatório fica em `out/results/` (no Mac) e em `/var/lib/flux-loadtest/result
 
 ## Limitações do laboratório
 
-- **CPU compartilhada:** os 6 containers dividem as vCPUs da VM do Docker Desktop (2
-  por padrão). Sob carga web, todos os "servidores" chegam a ~99% de CPU juntos, o
+- **CPU compartilhada:** os containers dividem as vCPUs da VM do Docker Desktop (2
+  por padrão) e todos leem o mesmo `/proc/stat`: a CPU de cada "servidor" no relatório
+  é a da VM do Docker. Com RTP nas duas pernas, 4 vCPU saturam por volta de 100
+  chamadas simultâneas. Sob carga web, todos os "servidores" chegam a ~99% de CPU juntos, o
   limite de CPU dispara e o SIPp mostra "Overload warning: watchdog timer". Para
   cargas maiores, aumente as vCPUs do Docker Desktop.
 - **keepalived:** a verificação do mysqld usa `timeout 5` e `fall 3` para o VIP não
@@ -300,7 +304,11 @@ O relatório fica em `out/results/` (no Mac) e em `/var/lib/flux-loadtest/result
 | OpenSIPS | `load_balancer` com `max` vindo do event socket dos dois FS; `dispatcher` com os dois nós ativos |
 | REGISTER do macOS (SIPp, ramal 1000) | 401 -> digest -> 200 OK; contato no `ul_dump` do OpenSIPS e `Registered(AUTO-NAT)` no FS escolhido pelo hash |
 | `check` do flux-loadtest | `fs_cli` e `opensips-cli` reais respondendo |
-| Chamada para DID (`smoke`), scripts do `sbc01` | Passa por OpenSIPS -> `load_balancer` -> FS -> dialplan Lua (DID local, conta 2); termina em **480** porque o ramal 1999 não está registrado (ver abaixo) |
+| Chamada para DID local de ramal não registrado, scripts do `sbc01` | Passa por OpenSIPS -> `load_balancer` -> FS -> dialplan Lua (DID local, conta 2); termina em **480** (ver abaixo) |
+| DID local de ramal registrado (ramal 1000 pelo macOS, 5 chamadas) | Só chega ao device quando o `load_balancer` escolhe o FS do registro: 1 de 5; as 4 que caíram no outro FS terminaram em `USER_NOT_REGISTERED` (ver abaixo) |
+| `smoke` para DID DIRECT-IP com atendedor | 1/1; 1 chamada recebida pelo atendedor; INVITE -> 200 em 148 ms. Mídia pelo FS nas duas pernas (`mediaStats`: originador :20000 e atendedor :40000 recebendo e enviando G.711) |
+| `run -t sip -r 3 -H 15 -w 45` com atendedor | 102/102 no originador e no atendedor, sem falhas; pico de 50 simultâneas; INVITE -> 200 em 129 ms; Zabbix: `flt.uas` e `flt.result[uas_*]` recebidos (359 valores, nenhum recusado) |
+| `run -t sip -r 10 -H 20 -w 60` com atendedor | Interrompido pelo guard (CPU ~95% em todos os "servidores": é a VM do Docker inteira, 4 vCPU); 168 chamadas atendidas sem falha no atendedor; 13 falhas no originador (480/502) com a CPU saturada |
 
 **DID para ramal não registrado não cai na caixa postal.** Nos scripts do `sbc01`
 (15/09) e do fork, o XML gerado para DID local (`custom_inbound_0` em
@@ -310,6 +318,16 @@ flux-sipdevice-routing.lua` (failover) e `leave_voicemail`. O
 bridge não termina em `SUCCESS`, então o `leave_voicemail` nunca executa: o chamador
 recebe 480 (`USER_NOT_REGISTERED`). A premissa da seção 6.6 do README (ramal não
 registrado com `vm-enabled` atende pela caixa postal) não vale para esses scripts.
+
+**DID para ramal registrado depende do nó.** O REGISTER do device passa pelo
+`dispatcher` (setid 2, hash do usuário) e fica em um FS só; as chamadas de operadora
+passam pelo `load_balancer` (grupo 1), que escolhe o FS pela carga, sem saber onde o
+ramal registrou. No outro FS, o `bridge user/RAMAL@dominio` termina em
+`USER_NOT_REGISTERED`. Como o laboratório usa o mesmo `opensips.cfg` e os mesmos scripts,
+o comportamento deve se repetir em produção.
+
+Por isso o teste de carga usa DIDs DIRECT-IP para o atendedor da vm-teste (seção 6.6 do
+README): o caminho não depende de registro nem de caixa postal.
 
 ## Validação do Zabbix (2026-10-14)
 
@@ -323,8 +341,8 @@ registrado com `vm-enabled` atende pela caixa postal) não vale para esses scrip
 
 ## DIDs
 
-O padrão são 100 mil DIDs fictícios (`5551900000000` a `5551900099999`), porque o SIP é
-simulado e qualquer número serve. A lista real de DIDs ativos pode ser usada aqui
+O padrão são 100 mil DIDs fictícios (`5551900000000` a `5551900099999`), DIRECT-IP
+para o atendedor da vm-teste. A lista real de DIDs ativos pode ser usada aqui
 (`./lab.sh conf --dids ARQUIVO`) para testar o volume, mas **não deve ser usada como
 `DID_FILE` em produção**: os DIDs ativos encaminham para PBXs e números de clientes,
 e o teste geraria chamadas reais.

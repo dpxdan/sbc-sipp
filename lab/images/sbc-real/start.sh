@@ -107,8 +107,10 @@ setup_fs() {
     cp -f "${FLUX_SRC}"/freeswitch/sounds/*.wav /usr/share/freeswitch/sounds/ 2>/dev/null || true
 
     sed -i "s#dbname:user:password#FLUX:fluxuser:${LAB_FLUX_DB_PASSWORD}#g" "${FS_CONF}/vars.xml"
-    # local_ip_v4 fixo no IP interno: o container tem duas interfaces
-    sed -i "0,/<include>/s#<include>#<include>\n  <X-PRE-PROCESS cmd=\"set\" data=\"local_ip_v4=${LAB_INT_IP}\"/>#" "${FS_CONF}/vars.xml"
+    # O container tem duas interfaces: local_ip_v4 fixo no IP interno (perfil lab-mac) e
+    # pub_ip_v4 no "publico", usado pelo perfil default (lab.sh), como em producao, onde
+    # o perfil das operadoras escuta e anuncia midia no IP publico (200.159.177.x:5070)
+    sed -i "0,/<include>/s#<include>#<include>\n  <X-PRE-PROCESS cmd=\"set\" data=\"local_ip_v4=${LAB_INT_IP}\"/>\n  <X-PRE-PROCESS cmd=\"set\" data=\"pub_ip_v4=${LAB_PUB_IP}\"/>#" "${FS_CONF}/vars.xml"
 
     # normalize_freeswitch do flux_install.sh + faixa de RTP publicada no macOS
     local sw="${FS_CONF}/autoload_configs/switch.conf.xml"
@@ -166,19 +168,22 @@ opensips_tables() {
             log "tabela ${tbl} criada (${f##*/})"
         fi
     done
-    # Origens: grupo 10 = operadoras (vm-teste), grupo 20 = pool FreeSWITCH
-    # load_balancer grupo 1 (chamadas de operadora) -> perfil default (5070)
-    # dispatcher setid 2 (REGISTER e chamadas dos devices) -> perfil lab-mac (5080)
+    # Origens: grupo 10 = operadoras (vm-teste), grupo 20 = pool FreeSWITCH (as duas faces)
+    # load_balancer grupo 1 (chamadas de operadora) -> perfil default (5070, IP publico);
+    #   o event socket tambem pelo publico: a ACL "event" do Flux libera opensips_domain
+    # dispatcher setid 2 (REGISTER e chamadas dos devices) -> perfil lab-mac (5080, interno)
     db <<SQL
 DELETE FROM address WHERE context_info = 'flux-lab';
 INSERT INTO address (grp, ip, mask, port, proto, context_info) VALUES
   (10, '172.30.177.50', 32, 0, 'any', 'flux-lab'),
+  (20, '172.30.177.163', 32, 0, 'any', 'flux-lab'),
+  (20, '172.30.177.162', 32, 0, 'any', 'flux-lab'),
   (20, '172.30.4.163', 32, 0, 'any', 'flux-lab'),
   (20, '172.30.4.162', 32, 0, 'any', 'flux-lab');
 DELETE FROM load_balancer WHERE description = 'flux-lab';
 INSERT INTO load_balancer (group_id, dst_uri, resources, probe_mode, description) VALUES
-  (1, 'sip:172.30.4.163:5070', 'channels=fs://:${LAB_FS_CLI_PASSWORD}@172.30.4.163:8021', 1, 'flux-lab'),
-  (1, 'sip:172.30.4.162:5070', 'channels=fs://:${LAB_FS_CLI_PASSWORD}@172.30.4.162:8021', 1, 'flux-lab');
+  (1, 'sip:172.30.177.163:5070', 'channels=fs://:${LAB_FS_CLI_PASSWORD}@172.30.177.163:8021', 1, 'flux-lab'),
+  (1, 'sip:172.30.177.162:5070', 'channels=fs://:${LAB_FS_CLI_PASSWORD}@172.30.177.162:8021', 1, 'flux-lab');
 DELETE FROM dispatcher WHERE description = 'flux-lab';
 INSERT INTO dispatcher (setid, destination, state, weight, priority, description) VALUES
   (2, 'sip:172.30.4.163:5080', 0, '1', 0, 'flux-lab'),
