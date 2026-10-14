@@ -7,6 +7,7 @@ Os templates descrevem os dados que o lib/flux_zabbix.py envia por trapper:
   flt.sys     JSON com as colunas de sistema de metrics/<id>.csv (todos os servidores)
   flt.app     JSON com as colunas do servico (processos + fs_*/os_*/db_*/ngx_*/fpm_*)
   flt.sip     JSON por linha do sip/stats.csv do SIPp            (host <prefixo>run)
+  flt.uas     JSON por linha do uas/stats.csv do atendedor       (host <prefixo>run)
   flt.web     JSON por alvo do wrk (web/<alvo>.txt)               (host <prefixo>run)
   flt.mysql   JSON do sysbench (intervalos e resumo)              (host <prefixo>run)
   flt.run.info, flt.phase, flt.guard, flt.result                  (host <prefixo>run)
@@ -157,6 +158,21 @@ SIP_ITEMS = [
     it("call_length_ms", "SIPp: duracao media das chamadas do periodo", "ms"),
 ]
 
+# Atendedor (SIPp UAS na VM de teste, DIDs DIRECT-IP): chamadas que o FS entregou
+UAS_ITEMS = [
+    it("call_rate", "Atendedor: chamadas recebidas por segundo no periodo"),
+    it("current_calls", "Atendedor: chamadas simultaneas", "", None, "U"),
+    it("received_c", "Atendedor: chamadas recebidas (acumulado)", "", None, "U"),
+    it("success_p", "Atendedor: sucesso no periodo", "", None, "U"),
+    it("failed_p", "Atendedor: falhas no periodo", "", None, "U"),
+    it("failed_pct_p", "Atendedor: falhas no periodo (% das encerradas)", "%"),
+    it("success_c", "Atendedor: sucesso (acumulado)", "", None, "U"),
+    it("failed_c", "Atendedor: falhas (acumulado)", "", None, "U"),
+    it("failed_unexpected_c", "Atendedor: falhas por mensagem inesperada (acumulado)", "", None, "U"),
+    it("failed_recv_timeout_c", "Atendedor: falhas sem BYE no prazo (acumulado)", "", None, "U"),
+    it("call_length_ms", "Atendedor: duracao media das chamadas do periodo", "ms"),
+]
+
 RUN_INFO_ITEMS = [
     ("execucao", "Execucao: identificador"),
     ("label", "Execucao: rotulo"),
@@ -168,6 +184,7 @@ RUN_INFO_ITEMS = [
     ("midia", "Execucao: midia"),
     ("limite_simultaneas", "Execucao: limite de simultaneas"),
     ("dids", "Execucao: DIDs"),
+    ("atendedor", "Execucao: atendedor (UAS)"),
     ("vm_teste", "Execucao: VM de teste"),
 ]
 
@@ -181,6 +198,10 @@ RESULT_ITEMS = [
     it("sip_falha_pct", "Resultado: falhas (%)", "%"),
     it("sip_pico_simultaneas", "Resultado: pico de simultaneas", "", None, "U"),
     it("sip_pico_cps", "Resultado: pico de CPS"),
+    it("uas_recebidas", "Resultado: chamadas recebidas pelo atendedor", "", None, "U"),
+    it("uas_sucesso", "Resultado: atendedor com sucesso", "", None, "U"),
+    it("uas_falhas", "Resultado: atendedor com falha", "", None, "U"),
+    it("uas_nao_chegaram", "Resultado: originadas que nao chegaram ao atendedor", "", None, "U"),
 ]
 
 WEB_TARGETS = [("static", "estatico"), ("php", "PHP"), ("extra", "extra")]
@@ -480,6 +501,8 @@ def run_template():
     }
     for d in SIP_ITEMS:
         items.append(("flt.sip", f"flt.sip[{d['col']}]", f"$.{d['col']}", d, sip_trig.get(d["col"])))
+    for d in UAS_ITEMS:
+        items.append(("flt.uas", f"flt.uas[{d['col']}]", f"$.{d['col']}", d, None))
     for tgt, label in WEB_TARGETS:
         for f in WEB_FIELDS:
             d = dict(f)
@@ -542,12 +565,13 @@ def emit(version):
     y.add(2, f"- uuid: {uid('template', tpl)}")
     y.add(3, f"template: {q(tpl)}")
     y.add(3, f"name: {q(tpl)}")
-    y.add(3, f"description: {q('Execucao do flux-loadtest (host <prefixo>run): parametros, fase, SIPp, wrk, sysbench, eventos do guard e resultado.')}")
+    y.add(3, f"description: {q('Execucao do flux-loadtest (host <prefixo>run): parametros, fase, SIPp, atendedor, wrk, sysbench, eventos do guard e resultado.')}")
     y.add(3, "groups:")
     y.add(4, f"- name: {q(GROUP)}")
     y.add(3, "items:")
     for key, name in [("flt.run.info", "Parametros da execucao (JSON do run.env)"),
                       ("flt.sip", "Amostra do SIPp (JSON do stats.csv)"),
+                      ("flt.uas", "Amostra do atendedor SIPp (JSON do uas/stats.csv)"),
                       ("flt.web", "Resultado do wrk (JSON por alvo)"),
                       ("flt.mysql", "sysbench (JSON por intervalo e resumo)"),
                       ("flt.result", "Resultado da execucao (JSON)")]:
@@ -580,6 +604,8 @@ def emit(version):
         (tpl, "Flux LT: SIPp simultaneas", ["flt.sip[current_calls]"]),
         (tpl, "Flux LT: SIPp sucesso x falha", ["flt.sip[success_p]", "flt.sip[failed_p]", "flt.sip[retrans_p]"]),
         (tpl, "Flux LT: SIPp tempo de resposta", ["flt.sip[rt_100_ms]", "flt.sip[rt_200_ms]"]),
+        (tpl, "Flux LT: originadas x atendidas", ["flt.sip[current_calls]", "flt.uas[current_calls]"]),
+        (tpl, "Flux LT: atendedor sucesso x falha", ["flt.uas[success_p]", "flt.uas[failed_p]"]),
         (tpl, "Flux LT: sysbench", ["flt.mysql[tps_now]", "flt.mysql[lat95_now_ms]"]),
     ]
 

@@ -26,7 +26,7 @@ resultado é um relatório `.txt` por execução, com os dados brutos ao lado.
 11. [Relatório e arquivos de saída](#11-relatório-e-arquivos-de-saída)
 12. [Limites de segurança (guard)](#12-limites-de-segurança-guard)
 13. [Segurança de credenciais](#13-segurança-de-credenciais)
-14. [Mídia e caixa postal](#14-mídia-e-caixa-postal)
+14. [Mídia](#14-mídia)
 15. [Dimensionamento da VM de teste](#15-dimensionamento-da-vm-de-teste)
 16. [Referência das funções](#16-referência-das-funções)
 17. [Solução de problemas](#17-solução-de-problemas)
@@ -40,7 +40,7 @@ resultado é um relatório `.txt` por execução, com os dados brutos ao lado.
 ```
 VM de teste --INVITE:5060--> OpenSIPS (sbc-stfc-1) --lb_start--> FS1 :5070 (sbc-stfc-1)
      |                                                      \--> FS2 :5070 (sbc-stfc-02)
-     |                                                              |
+     |<--INVITE:5090 + RTP do FS (DIDs DIRECT-IP, atendedor)         |
      |--wrk--> nginx -> PHP-FPM 7.3 (sbc-stfc-interfaceweb)          v
      |                         \------------------------> VIP 172.17.4.100 (keepalived)
      |--sysbench (opcional, rede interna) --------------->   Percona XtraDB Cluster
@@ -48,9 +48,11 @@ VM de teste --INVITE:5060--> OpenSIPS (sbc-stfc-1) --lb_start--> FS1 :5070 (sbc-
      +--ssh (coletor /proc) --> todos os servidores
 ```
 
-- **SIP:** o SIPp envia INVITE para DIDs reais que caem na caixa postal. As
-  chamadas entram no OpenSIPS como operadora e seguem pelo `load_balancer` até os
-  FreeSWITCH. Também é possível apontar direto para um FreeSWITCH (seção 8.4).
+- **SIP:** o SIPp envia INVITE para DIDs de uma conta de teste. As chamadas entram
+  no OpenSIPS como operadora e seguem pelo `load_balancer` até os FreeSWITCH. Os DIDs
+  são DIRECT-IP (`call_type = 2`) e apontam para a própria VM: um segundo SIPp
+  (atendedor, `UAS_PORT`) recebe o bridge do FS e atende, com mídia nos dois sentidos
+  (seção 6.6). Também é possível apontar direto para um FreeSWITCH (seção 8.4).
 - **Web:** o `wrk` mede um arquivo estático (nginx puro) e uma página PHP (nginx +
   PHP-FPM + sessão no MySQL).
 - **MySQL:** sempre coletado de forma passiva; carga ativa com `sysbench`
@@ -232,6 +234,8 @@ Numa VM de teste dentro da rede interna, use os IPs 172.17.4.x.
 | `CALLER_ID` | — | Número de A das chamadas (facilita filtrar CDRs) |
 | `RTP_PORT_BASE` | `20000` | Porta base de RTP do SIPp |
 | `SIP_RECV_TIMEOUT_MS` | `60000` | Espera máxima pelo 200 OK; depois a chamada conta como falha |
+| `UAS_PORT` | vazio | Porta UDP do atendedor (SIPp UAS) na VM. Os DIDs ficam como DIRECT-IP com `extensions = <IP da VM visto pelos FS>:UAS_PORT` (seção 6.6). Vazio = sem atendedor |
+| `UAS_RTP_PORT_BASE` | `40000` | Porta base de RTP do atendedor (diferente de `RTP_PORT_BASE`) |
 
 ### 5.4 FreeSWITCH
 
@@ -239,7 +243,7 @@ Numa VM de teste dentro da rede interna, use os IPs 172.17.4.x.
 |---|---|---|
 | `FS_CLI_CMD` | `fs_cli -x` | Comando no servidor (ex.: `sudo -n fs_cli -x`, ou com `-H`/`-P`) |
 | `FS_CLI_PASSWORD_FILE` | vazio | Arquivo 0600 na VM com a senha do event socket (seção 13) |
-| `FS_DISK_PATH` | `/var/lib/freeswitch` | Partição vigiada pelo limite de disco (caixa postal) |
+| `FS_DISK_PATH` | `/var/lib/freeswitch` | Partição vigiada pelo limite de disco (gravações, logs, caixa postal) |
 | `VM_BOXES` | vazio | Caixas postais de teste (`ramal@dominio`) contadas antes/depois |
 | `VM_GREETING_SECONDS` | `8` | Duração da saudação (só para a estimativa de disco do plano) |
 | `VM_BYTES_PER_SECOND` | `16000` | Bytes/s gravados por chamada (WAV 8 kHz 16 bit) |
@@ -349,6 +353,7 @@ loadtest ALL=(root) NOPASSWD: /usr/bin/fs_cli, /usr/bin/opensips-cli
 | OpenSIPS (`sbc-stfc-1`, 5060) | IP da VM na tabela `address`, grupo de operadoras (`FLUX_GRP_CARRIERS` = 10), seguido de `opensips-cli -x mi address_reload` |
 | FreeSWITCH direto (5070 no `sbc-stfc-1` e no `sbc-stfc-02`) | IP da VM na ACL de entrada do profile. No FluxSBC a lista `domains` é gerada pelo `acl.lua` a partir de `system_components` e `domain.external_server` |
 | Event Guard / fail2ban | IP da VM na whitelist, senão o volume de INVITEs pode bloquear a VM no meio do teste |
+| Firewall da VM (atendedor) | Entrada vinda dos FS (`200.159.177.163` e `.162`): `UAS_PORT`/udp e o RTP a partir de `UAS_RTP_PORT_BASE` (2 portas por chamada simultânea) |
 
 Atrás de NAT, libere o IP **público**, não o IP privado da VM.
 
@@ -385,32 +390,67 @@ liberado só para 127.0.0.1.
 
 ### 6.6 DIDs de teste
 
-> **Atenção (2026-10-14):** no laboratório, com os scripts Lua do `sbc01` (15/09), o DID
-> para ramal não registrado termina em 480 e não chega à caixa postal: o
-> `flux-sipdevice-routing.lua` desliga a chamada antes do `leave_voicemail` (detalhes em
-> `lab/README.md`, "Validação do SBC real"). Confirme com um `smoke` em produção antes de
-> montar a massa de DIDs.
+Destino recomendado: **DID DIRECT-IP para o atendedor da VM de teste.** O dialplan Lua
+(`custom_inbound_2` do `flux.xml.lua`) faz `bridge sofia/<perfil>/<DID>@<extensions>`;
+com `extensions` = IP e porta da VM, o FS entrega a chamada ao SIPp atendedor
+(`UAS_PORT`), que responde 200 OK com SDP e, com `--media rtp`, também transmite. A
+chamada passa por OpenSIPS, `load_balancer`, consulta do DID no MySQL, billing e
+bridge com mídia nos dois sentidos, como o tráfego real: os DIDs ativos do STFC
+encaminham para PBXs por IP.
+
+Por que não a caixa postal (validado no laboratório em 2026-10-14, detalhes em
+`lab/README.md`, "Validação do SBC real"):
+
+- DID para ramal **não registrado** termina em 480: o `flux-sipdevice-routing.lua`
+  desliga a chamada antes do `leave_voicemail`, com os scripts do `sbc01` e do fork;
+- DID para ramal **registrado** depende do nó: o REGISTER fica no FS escolhido pelo
+  `dispatcher` (hash do usuário), mas o `load_balancer` distribui as chamadas de
+  operadora entre os dois FS; no outro nó o resultado é `USER_NOT_REGISTERED`.
 
 Cada DID do `DID_FILE` precisa:
 
-- ser do tipo DID-LOCAL (`call_type = 0`);
-- apontar para um ramal **não registrado** com `vm-enabled=true` (o `bridge` falha e o
-  dialplan cai em `leave_voicemail`, que atende e grava);
-- pertencer a uma conta de teste **sem tarifa** (cada chamada gera CDR e passa pelo billing).
+- ser DIRECT-IP (`call_type = 2`) com `extensions = <IP da VM visto pelos FS>:<UAS_PORT>`
+  (atrás de NAT, o IP público da VM);
+- pertencer a uma conta de teste **sem tarifa** (cada chamada gera CDR e passa pelo
+  billing), com `maxchannels` e crédito que não limitem o teste;
+- usar uma faixa de numeração fictícia, que nenhuma operadora encaminhe.
 
 Use pelo menos tantos DIDs quanto chamadas simultâneas.
 
 > **Não use DIDs ativos de clientes.** Na base do STFC (outubro/2026), os 66,5 mil DIDs
-> ativos encaminham para PBXs (por IP ou hostname) e números externos de 116 contas;
-> nenhum cai na caixa postal. Usá-los no teste geraria chamadas reais para os clientes.
-> Crie uma massa de DIDs numa conta de teste, apontando para um ramal não registrado
-> com caixa postal.
+> ativos encaminham para PBXs (por IP ou hostname) e números externos de 116 contas.
+> Usá-los no teste geraria chamadas reais para os clientes.
 
-Exportar do banco (somente leitura):
+Criação da massa (escrita no banco de produção: revisar e executar com o responsável
+pelo ambiente). Antes, crie **um** DID DIRECT-IP pela interface na conta de teste e
+compare as colunas com o `INSERT` abaixo (o schema pode ter colunas a mais). Em lotes
+de 10 mil, para não gerar um writeset grande no Percona XtraDB Cluster:
+
+```sql
+SET SESSION cte_max_recursion_depth = 100000;
+INSERT INTO dids (number, accountid, inc, extensions, status, call_type, leg_timeout, product_id,
+  always, always_destination, user_busy, user_busy_destination, user_not_registered,
+  user_not_registered_destination, no_answer, no_answer_destination, failover_extensions, last_modified_date)
+WITH RECURSIVE seq (n) AS (SELECT 0 UNION ALL SELECT n + 1 FROM seq WHERE n < 9999)
+SELECT CONCAT('<PREFIXO_FICTICIO>', LPAD(n + <INICIO_DO_LOTE>, 8, '0')), <ID_CONTA_TESTE>, 60,
+  '<IP_DA_VM>:5090', 0, 2, 30, 0, 0, '', 0, '', 0, '', 0, '', '', NOW()
+FROM seq;
+```
+
+Exportar a lista para a VM (somente leitura):
 
 ```bash
-mysql -N -B -e "SELECT number FROM dids WHERE accountid = <ID_CONTA_TESTE> AND status = 0 AND call_type = 0" flux > /etc/flux-loadtest/dids.txt
+mysql -N -B -e "SELECT number FROM dids WHERE accountid = <ID_CONTA_TESTE> AND status = 0 AND call_type = 2" flux > /etc/flux-loadtest/dids.txt
 ```
+
+Remoção depois do teste (também em lotes):
+
+```sql
+DELETE FROM dids WHERE accountid = <ID_CONTA_TESTE> AND number LIKE '<PREFIXO_FICTICIO>%' LIMIT 10000;
+```
+
+Sem `UAS_PORT`, o `flux-loadtest` continua enviando para qualquer DID que o FS atenda
+sozinho (por exemplo, caixa postal); o relatório só não terá a seção do atendedor.
 
 ## 7. Comandos
 
@@ -504,8 +544,9 @@ usuário sem permissão para o `fs_cli`.
 ### 7.3 `smoke` — uma chamada de validação
 
 **Função:** enviar uma única chamada (5 s de duração) e mostrar o resultado SIP.
-Confirma que o destino aceita a origem e que o DID cai na caixa postal. Não usa SSH
-nem coleta métricas.
+Confirma que o destino aceita a origem e, com `UAS_PORT`, que o FS entrega a chamada
+ao atendedor (o resultado mostra "Chamadas recebidas do FS"). Não usa SSH nem coleta
+métricas.
 
 | Opção | Descrição |
 |---|---|
@@ -549,7 +590,8 @@ servidores e gerar o relatório.
 | `-y, --yes` | — | Não pede a palavra `PRODUCAO` no terminal |
 
 Simultâneas em regime = CPS x hold. O plano avisa quando `--max-concurrent` fica
-abaixo disso e estima o volume gravado na caixa postal com `--media rtp`.
+abaixo disso. Com `UAS_PORT`, o plano mostra o atendedor; sem ele, estima o volume
+gravado na caixa postal com `--media rtp`.
 
 ### 7.5 `report` — regenerar o relatório
 
@@ -663,8 +705,8 @@ Para o FS do `sbc-stfc-1`, use `200.159.177.163` com a porta `5070` (a `5060` é
 ./flux-loadtest.sh run --confirm-prod -t sip -r 50 -H 20 -w 300 -M rtp --label cps50-rtp
 ```
 
-A diferença de `freeswitch_cpu_pct`, `net_*_pps` e `disk_wr_kbs` entre os dois mostra
-o custo de mídia e de gravação.
+A diferença de `freeswitch_cpu_pct` e `net_*_pps` entre os dois mostra o custo de
+mídia: com o atendedor, o FS ancora o RTP das duas pernas (originador e atendedor).
 
 ### 8.6 Rampa personalizada e total fixo de chamadas
 
@@ -753,7 +795,7 @@ Todos os testes nas metas da issue (um degrau por execução):
 ./flux-loadtest.sh run --confirm-prod --fs-password -t sip,web,mysql -r 100 -H 30 -w 600 --web-duration 60 --mysql-duration 120 --label todos-c3000-cps100
 ```
 
-Todos os testes com RTP (mede também o custo de mídia e a gravação da caixa postal):
+Todos os testes com RTP (mede também o custo de mídia nos FS):
 
 ```bash
 ./flux-loadtest.sh run --confirm-prod --fs-password -t sip,web,mysql -r 50 -H 20 -w 300 -M rtp --label todos-rtp
@@ -994,6 +1036,7 @@ memória disponível, CPU ociosa do FS) e `+` a variação de um contador.
 | `phases.tsv` | Fases com início e fim (epoch) |
 | `metrics/<host>.csv` | Amostras brutas do coletor; `.err` com o stderr dele |
 | `sip/` | `stats.csv`, `errors.log`, `actions.log`, `screen.log`, `calls.csv`, cenário gerado |
+| `uas/` | Atendedor (com `UAS_PORT`): `stats.csv`, `errors.log`, `sipp.stderr`, `uas.xml` |
 | `web/`, `mysql/` | Saídas completas do `wrk` e do `sysbench` |
 | `snapshots/<host>-pre.txt`, `-post.txt` | Estado antes e depois (`status`, `lb_list`, réplica, PHP-FPM) |
 | `guard.log` | Cada amostra acima de um limite |
@@ -1059,22 +1102,24 @@ install -m 0600 /dev/null /etc/flux-loadtest/fs_cli.pass
 read -r -s -p "Senha: " p && printf '%s\n' "$p" > /etc/flux-loadtest/fs_cli.pass && unset p
 ```
 
-## 14. Mídia e caixa postal
+## 14. Mídia
 
-Com o destino na caixa postal, o FS sempre atende e trata a mídia (`answer` +
-`voicemail`). Por isso não há perfil de bypass neste cenário: `bypass_media` só vale
-no caminho de saída do cliente.
+Com DIDs DIRECT-IP e o atendedor, o FS faz bridge entre a perna de entrada
+(originador) e a de saída (atendedor). Com `bypass_media = 0` no DID (padrão), o FS
+ancora o RTP das duas pernas: é o custo de mídia do tráfego de PBX por IP.
 
 | Modo | Comportamento |
 |---|---|
-| `--media none` | Sem RTP de origem. Mede sinalização e dialplan. O FS pode encerrar por silêncio depois do beep ("BYE remoto") |
-| `--media rtp` | O SIPp transmite um tom G.711 a-law (400 Hz / 1 kHz alternados) em loop. O tom evita a detecção de silêncio e mantém a chamada pelo hold inteiro |
+| `--media none` | Sem RTP nos dois SIPp. Mede sinalização, dialplan, MySQL e billing |
+| `--media rtp` | Originador e atendedor transmitem um tom G.711 a-law (400 Hz / 1 kHz alternados) em loop: o FS recebe e repassa RTP nas duas pernas |
 
-Com `--media rtp`, cada chamada grava cerca de `(hold - saudação) x 16 KB/s` no FS.
-O plano mostra a estimativa (por exemplo, 300 CPS x 600 s x hold 30 = ~63 GB) e o
-limite de disco vigia `FS_DISK_PATH`. As mensagens ficam na caixa postal de teste:
-configure `VM_BOXES` para contá-las nos snapshots e faça a limpeza pela interface ou
-pelo `fs_cli`.
+Variação adicional: DIDs com `bypass_media = 1` deixam o RTP fluir direto entre
+originador e atendedor (o FS só sinaliza). Comparar as duas massas mostra quanto do
+custo do FS é mídia.
+
+Sem atendedor (destino na caixa postal), o FS atende e grava: cada chamada grava cerca
+de `(hold - saudação) x 16 KB/s`, o plano mostra a estimativa, o limite de disco vigia
+`FS_DISK_PATH` e `VM_BOXES` conta as mensagens nos snapshots.
 
 ## 15. Dimensionamento da VM de teste
 
@@ -1083,10 +1128,10 @@ confirmar com as linhas `gen` do relatório de cada degrau:
 
 | Recurso | Estimativa |
 |---|---|
-| CPU | 8 vCPU (sinalização do SIPp em ~1 núcleo; RTP nas threads do rtpstream) |
+| CPU | 8 vCPU (dois SIPp, originador e atendedor, com a sinalização em ~1 núcleo cada; RTP nas threads do rtpstream) |
 | Memória | 8 GB |
-| Rede | 1 Gbps: 3000 fluxos G.711 x ~90 kbit/s = ~270 Mbit/s por sentido, ~150 mil pps |
-| Arquivos abertos | `ulimit -n` >= 3 x simultâneas (o script tenta elevar para 65536) |
+| Rede | 1 Gbps: com o atendedor, 2 x 3000 fluxos G.711 x ~90 kbit/s = ~540 Mbit/s por sentido, ~300 mil pps |
+| Arquivos abertos | `ulimit -n` >= 3 x simultâneas por SIPp (o script tenta elevar para 65536) |
 
 Com `--media none`, a VM de teste precisa de muito menos: no piloto a 1 CPS, o SIPp
 usou ~4% de um núcleo. `GUARD_MAX_GEN_CPU_PCT` interrompe o teste se a própria VM
@@ -1132,11 +1177,15 @@ saturar, porque nesse caso os números deixam de representar os servidores.
 | `parse_sip_target`, `detect_local_ip` | Valida `SIP_TARGET` e descobre o IP de origem pela rota |
 | `build_calls_csv` | Gera o CSV do SIPp com os DIDs válidos embaralhados e o número de A |
 | `build_rtp_file` | Gera 20 s de tom G.711 a-law (codificador em Python puro) |
-| `render_scenario` | Preenche o modelo do cenário (hold, porta de mídia, RTP, id da execução) |
+| `render_scenario` | Preenche um modelo de cenário (hold ou espera do BYE, porta de mídia, RTP, id da execução) |
 | `sipp_args`, `prepare_sip` | Monta a linha do SIPp (rampa, limites, arquivos de estatística e erro) |
 | `raise_nofile` | Eleva `ulimit -n` e avisa se ficar abaixo do necessário |
 | `run_sip_phase` | Executa o SIPp, vigia os limites e controla janela, drenagem e `SIGTERM` de segurança |
 | `sip_all_done` | Pelas estatísticas do SIPp, indica se todas as chamadas criadas já terminaram |
+| `uas_enabled`, `uas_port_free` | Atendedor configurado (`UAS_PORT`) e porta UDP livre na VM (`ss`) |
+| `uas_args`, `prepare_uas` | Gera `uas/uas.xml` (cenário `uas-answer.xml.in`) e a linha do SIPp atendedor |
+| `start_uas`, `stop_uas` | Sobe o atendedor no início da fase `sip` (falha se a porta não abrir) e o encerra com um `SIGUSR1` depois da drenagem (`SIGTERM` após 15 s) |
+| `sipp_last`, `report_uas` | Última linha do `stats.csv`; seção "Atendedor" do relatório (recebidas, atendidas, falhas, originadas que não chegaram) |
 | `wrk_url` | Coloca a porta explícita na URL do `wrk` (Debian mínimo sem `/etc/services`) |
 | `sipp_soft_stop` | Envia um único `SIGUSR1` ao SIPp |
 
@@ -1216,7 +1265,7 @@ saturar, porque nesse caso os números deixam de representar os servidores.
 |---|---|
 | `Sender` | Protocolo do trapper (`ZBXD\x01`, lotes de 250 valores); mantém a fila se o Zabbix cair (modo ao vivo) |
 | `Tail` | Lê só linhas completas novas de um arquivo ainda em escrita |
-| `RunReader` | Converte o diretório da execução em valores: `metrics/*.csv`, `sip/stats.csv`, fases, `guard.log`, `wrk`, `sysbench`, `run.env` e o resultado final |
+| `RunReader` | Converte o diretório da execução em valores: `metrics/*.csv`, `sip/stats.csv`, `uas/stats.csv`, fases, `guard.log`, `wrk`, `sysbench`, `run.env` e o resultado final |
 | `parse_wrk`, `parse_sysbench_summary` | Extraem req/s, latências, erros, tps/qps |
 | `cmd_send`, `cmd_setup`, `cmd_check`, `cmd_bootstrap` | Subcomandos; `bootstrap` é só do laboratório (senha inicial do Admin e token) |
 
@@ -1226,8 +1275,10 @@ saturar, porque nesse caso os números deixam de representar os servidores.
 |---|---|---|
 | `smoke`: resposta 403 | Origem não autorizada no OpenSIPS | IP (público, se houver NAT) na tabela `address`, grupo 10 |
 | `smoke`: resposta 407 ou 401 | Origem fora da ACL do FS (destino direto) | Liberar o IP na ACL de entrada do profile |
-| Resposta 404 ou 480 | DID inexistente ou sem destino | Conferir o DID no banco e o `call_type` |
-| Resposta 486 Busy Here | Ramal do DID registrado/ocupado, ou caixa postal desativada | `fs_cli -x "sofia_contact RAMAL@DOMINIO"` deve retornar `error/user_not_registered`; `vm-enabled` = `true`; usar mais DIDs |
+| Resposta 404 ou 480 | DID inexistente, sem destino, ou DID para ramal (caixa postal não é alcançada, seção 6.6) | Conferir o DID no banco: `call_type = 2` e `extensions` |
+| Resposta 502, 503 ou 408 com atendedor | FS não alcança `IP:UAS_PORT` da VM (firewall, IP errado, atendedor parado) | `check` mostra a porta; liberar SIP e RTP dos FS para a VM; conferir `extensions` |
+| "Originadas que nao chegaram aqui" > 0 | Chamadas recusadas antes do bridge (OpenSIPS, dialplan, limite de canais) | Ver "Falhas por motivo" do originador e o log do FS |
+| Atendedor: "sem BYE no prazo" | FS não repassou o BYE (perda de pacote ou FS sobrecarregado) | Ver `uas/errors.log` e a CPU dos FS no relatório |
 | Resposta 503 | Limite de canais do DID/conta, ou `max-sessions`/`sessions-per-second` do FS | Conferir `maxchannels` e o `check` |
 | Timeout de retransmissão | Firewall, porta SIP errada, IP bloqueado pelo fail2ban, servidor lento | Testar a porta; whitelist do Event Guard |
 | "receive timeout ... jumping to label" no `errors.log` | **Não é erro**: é o fim do hold, a VM envia o BYE | Nada; o relatório conta como "fim do hold" |
@@ -1252,7 +1303,8 @@ saturar, porque nesse caso os números deixam de representar os servidores.
 - Os timestamps são gerados em cada servidor; mantenha NTP/chrony ativo.
 - As métricas de rede somam todas as interfaces exceto `lo`.
 - O consumo de cada thread é atribuído ao último núcleo em que ela rodou no intervalo.
-- O cenário cobre só INVITE para DID com caixa postal; não registra ramais.
+- O cenário cobre INVITE para DID (DIRECT-IP com atendedor, ou atendido no FS); não
+  registra ramais (o registro de devices é validado à parte, `lab/sip/register.xml`).
 - O envio ao Zabbix não usa criptografia (sem TLS/PSK no trapper): use em rede interna
   ou por um proxy Zabbix local à VM de teste.
 - Os templates são gerados no formato do Zabbix 7.4 (`zabbix/gen_templates.py --version`
@@ -1285,7 +1337,7 @@ VM de teste                                         Zabbix (server ou proxy)
 | `<prefixo>db1`, `db2` | Sistema + MySQL PXC | `metrics/dbN.csv` |
 | `<prefixo>web` | Sistema + Web | `metrics/web.csv` |
 | `<prefixo>gen` | Sistema + Gerador | `metrics/gen.csv` (macro `{$FLT.CPU.MAX}` = `GUARD_MAX_GEN_CPU_PCT`) |
-| `<prefixo>run` | Execução | `run.env`, fases, `sip/stats.csv`, `web/`, `mysql/`, `guard.log`, `abort.txt` |
+| `<prefixo>run` | Execução | `run.env`, fases, `sip/stats.csv`, `uas/stats.csv`, `web/`, `mysql/`, `guard.log`, `abort.txt` |
 
 Chaves trapper (o template extrai cada métrica do JSON por item dependente):
 
@@ -1294,9 +1346,10 @@ Chaves trapper (o template extrai cada métrica do JSON por item dependente):
 | `flt.sys` | Colunas de sistema do coletor (CPU, memória, rede, disco) |
 | `flt.app` | Colunas do serviço e dos processos (`fs_*`, `os_*`, `db_*`, `ngx_*`, `fpm_*`, `<processo>_cpu_pct`...) |
 | `flt.sip` | Uma linha do `stats.csv` do SIPp: CPS alvo e real, simultâneas, sucesso/falha no período e acumulado, retransmissões, watchdog, INVITE->100/200 |
+| `flt.uas` | Uma linha do `stats.csv` do atendedor: recebidas por segundo, simultâneas, sucesso/falha no período e acumulado, falhas sem BYE, duração |
 | `flt.web` | Resultado do `wrk` por alvo (`static`, `php`, `extra`): req/s, latências p50/p90/p99, erros |
 | `flt.mysql` | Intervalos (`*_now`) e resumo do `sysbench` |
-| `flt.run.info`, `flt.phase`, `flt.guard`, `flt.result` | Parâmetros, fase em andamento, eventos do guard e resultado (`ok`/`interrompido`, totais SIP) |
+| `flt.run.info`, `flt.phase`, `flt.guard`, `flt.result` | Parâmetros, fase em andamento, eventos do guard e resultado (`ok`/`interrompido`, totais SIP e do atendedor) |
 
 Unidades convertidas no template: MB -> B, Mbps -> bps, kB/s -> B/s.
 

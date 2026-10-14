@@ -1834,7 +1834,7 @@ zabbix_export:
     - uuid: 08c13538089540d599aa4479f48c3c54
       template: 'Flux Loadtest - Execucao'
       name: 'Flux Loadtest - Execucao'
-      description: 'Execucao do flux-loadtest (host <prefixo>run): parametros, fase, SIPp, wrk, sysbench, eventos do guard e resultado.'
+      description: 'Execucao do flux-loadtest (host <prefixo>run): parametros, fase, SIPp, atendedor, wrk, sysbench, eventos do guard e resultado.'
       groups:
         - name: 'Templates/Flux Loadtest'
       items:
@@ -1854,6 +1854,18 @@ zabbix_export:
         name: 'Amostra do SIPp (JSON do stats.csv)'
         type: TRAP
         key: 'flt.sip'
+        delay: '0'
+        history: '0'
+        trends: '0'
+        value_type: TEXT
+        description: 'Trapper: JSON enviado pelo flux-loadtest.'
+        tags:
+          - tag: 'component'
+            value: 'raw'
+      - uuid: 37e03c02a8674fad86eeffcd6da46812
+        name: 'Amostra do atendedor SIPp (JSON do uas/stats.csv)'
+        type: TRAP
+        key: 'flt.uas'
         delay: '0'
         history: '0'
         trends: '0'
@@ -2096,6 +2108,24 @@ zabbix_export:
           - type: JSONPATH
             parameters:
               - '$.dids'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.run.info'
+        tags:
+          - tag: 'component'
+            value: 'run'
+      - uuid: 75f5f20aecff458592b1559ad2b6a96c
+        name: 'Execucao: atendedor (UAS)'
+        type: DEPENDENT
+        key: 'flt.run[atendedor]'
+        delay: '0'
+        history: 90d
+        trends: '0'
+        value_type: CHAR
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.atendedor'
             error_handler: DISCARD_VALUE
         master_item:
           key: 'flt.run.info'
@@ -2454,6 +2484,195 @@ zabbix_export:
         tags:
           - tag: 'component'
             value: 'sip'
+      - uuid: 953658195d8b4804b20369c84b17e81a
+        name: 'Atendedor: chamadas recebidas por segundo no periodo'
+        type: DEPENDENT
+        key: 'flt.uas[call_rate]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.call_rate'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.uas'
+        tags:
+          - tag: 'component'
+            value: 'uas'
+      - uuid: 676b52b6a4e149ac9aa7b5706b2d2760
+        name: 'Atendedor: chamadas simultaneas'
+        type: DEPENDENT
+        key: 'flt.uas[current_calls]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.current_calls'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.uas'
+        tags:
+          - tag: 'component'
+            value: 'uas'
+      - uuid: 2fd5033edc6544eeb7371dcafee98db5
+        name: 'Atendedor: chamadas recebidas (acumulado)'
+        type: DEPENDENT
+        key: 'flt.uas[received_c]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.received_c'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.uas'
+        tags:
+          - tag: 'component'
+            value: 'uas'
+      - uuid: ec2ce35ef3d948c0adc0d87fa2bd06b5
+        name: 'Atendedor: sucesso no periodo'
+        type: DEPENDENT
+        key: 'flt.uas[success_p]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.success_p'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.uas'
+        tags:
+          - tag: 'component'
+            value: 'uas'
+      - uuid: e17bb241d98846d58ca9b698f8c8f7f1
+        name: 'Atendedor: falhas no periodo'
+        type: DEPENDENT
+        key: 'flt.uas[failed_p]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.failed_p'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.uas'
+        tags:
+          - tag: 'component'
+            value: 'uas'
+      - uuid: ec56f76f1ebc43d895deb3184d9b5c02
+        name: 'Atendedor: falhas no periodo (% das encerradas)'
+        type: DEPENDENT
+        key: 'flt.uas[failed_pct_p]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.failed_pct_p'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.uas'
+        tags:
+          - tag: 'component'
+            value: 'uas'
+      - uuid: 77546fd6b2184f4ab57e4cc1554355f0
+        name: 'Atendedor: sucesso (acumulado)'
+        type: DEPENDENT
+        key: 'flt.uas[success_c]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.success_c'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.uas'
+        tags:
+          - tag: 'component'
+            value: 'uas'
+      - uuid: d76d12f7ded54d9a94190300f49890c2
+        name: 'Atendedor: falhas (acumulado)'
+        type: DEPENDENT
+        key: 'flt.uas[failed_c]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.failed_c'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.uas'
+        tags:
+          - tag: 'component'
+            value: 'uas'
+      - uuid: 3e25fe4db1294287930f824fca0a0d09
+        name: 'Atendedor: falhas por mensagem inesperada (acumulado)'
+        type: DEPENDENT
+        key: 'flt.uas[failed_unexpected_c]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.failed_unexpected_c'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.uas'
+        tags:
+          - tag: 'component'
+            value: 'uas'
+      - uuid: 6cced50f0ae5423da4644b31d23fad95
+        name: 'Atendedor: falhas sem BYE no prazo (acumulado)'
+        type: DEPENDENT
+        key: 'flt.uas[failed_recv_timeout_c]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.failed_recv_timeout_c'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.uas'
+        tags:
+          - tag: 'component'
+            value: 'uas'
+      - uuid: 3a3d9a3bd8d740b78b72a7a4e2a61164
+        name: 'Atendedor: duracao media das chamadas do periodo'
+        type: DEPENDENT
+        key: 'flt.uas[call_length_ms]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'ms'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.call_length_ms'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.uas'
+        tags:
+          - tag: 'component'
+            value: 'uas'
       - uuid: dd524f9b502046e986b00eb20271c8e7
         name: 'wrk estatico: requisicoes por segundo'
         type: DEPENDENT
@@ -3296,6 +3515,74 @@ zabbix_export:
         tags:
           - tag: 'component'
             value: 'result'
+      - uuid: 51dd3ee236b6464b8967b10e8d93f0ed
+        name: 'Resultado: chamadas recebidas pelo atendedor'
+        type: DEPENDENT
+        key: 'flt.result[uas_recebidas]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.uas_recebidas'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.result'
+        tags:
+          - tag: 'component'
+            value: 'result'
+      - uuid: 4146307ab70e49049b94dd8747376bf1
+        name: 'Resultado: atendedor com sucesso'
+        type: DEPENDENT
+        key: 'flt.result[uas_sucesso]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.uas_sucesso'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.result'
+        tags:
+          - tag: 'component'
+            value: 'result'
+      - uuid: eb8846de697f4d8fad63500c4afcd147
+        name: 'Resultado: atendedor com falha'
+        type: DEPENDENT
+        key: 'flt.result[uas_falhas]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.uas_falhas'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.result'
+        tags:
+          - tag: 'component'
+            value: 'result'
+      - uuid: 6225f026d1c14fa3be8cededd74bc280
+        name: 'Resultado: originadas que nao chegaram ao atendedor'
+        type: DEPENDENT
+        key: 'flt.result[uas_nao_chegaram]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.uas_nao_chegaram'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.result'
+        tags:
+          - tag: 'component'
+            value: 'result'
       macros:
         - macro: '{$FLT.SIP.FAIL.MAX}'
           value: '5'
@@ -3572,6 +3859,30 @@ zabbix_export:
           item:
             host: 'Flux Loadtest - Execucao'
             key: 'flt.sip[rt_200_ms]'
+    - uuid: 5f1e5ad349744072a7edae0e34f7d6d2
+      name: 'Flux LT: originadas x atendidas'
+      graph_items:
+        - color: 1A7C11
+          item:
+            host: 'Flux Loadtest - Execucao'
+            key: 'flt.sip[current_calls]'
+        - sortorder: '1'
+          color: F63100
+          item:
+            host: 'Flux Loadtest - Execucao'
+            key: 'flt.uas[current_calls]'
+    - uuid: 7bda0f1fdb874324a35a1e77c5aa0b9f
+      name: 'Flux LT: atendedor sucesso x falha'
+      graph_items:
+        - color: 1A7C11
+          item:
+            host: 'Flux Loadtest - Execucao'
+            key: 'flt.uas[success_p]'
+        - sortorder: '1'
+          color: F63100
+          item:
+            host: 'Flux Loadtest - Execucao'
+            key: 'flt.uas[failed_p]'
     - uuid: 600bf61c5c41476bb34343de103d08a3
       name: 'Flux LT: sysbench'
       graph_items:

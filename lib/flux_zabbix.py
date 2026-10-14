@@ -251,8 +251,9 @@ class RunReader:
         self.hosts = {}           # id -> role
         self.metric_tails = {}    # id -> (Tail, header)
         self.sip_tail = Tail(os.path.join(self.dir, "sip", "stats.csv"))
-        self.sip_hdr = None
-        self.sip_stats = {"peak_cc": 0, "peak_cps": 0.0, "last": None}
+        self.sip_stats = {"hdr": None, "peak_cc": 0, "peak_cps": 0.0, "last": None}
+        self.uas_tail = Tail(os.path.join(self.dir, "uas", "stats.csv"))
+        self.uas_stats = {"hdr": None, "last": None}
         self.guard_tail = Tail(os.path.join(self.dir, "guard.log"))
         self.start_tail = Tail(os.path.join(self.dir, "phases-start.tsv"))
         self.phases_tail = Tail(os.path.join(self.dir, "phases.tsv"))
@@ -311,18 +312,21 @@ class RunReader:
                     self.s.add(host, "flt.app", ts, appv)
 
     # ------------------------------------------------------------- SIPp
-    def poll_sip(self):
-        for line in self.sip_tail.lines():
+    @staticmethod
+    def sipp_rows(tail, state):
+        """Linhas novas de um stats.csv do SIPp: (ts, g, n), g(col) texto e n(col) numero.
+        state["hdr"] guarda o cabecalho entre chamadas (o arquivo cresce durante o run)."""
+        for line in tail.lines():
             cols = line.split(";")
-            if self.sip_hdr is None:
+            if state["hdr"] is None:
                 if "CurrentTime" in cols:
-                    self.sip_hdr = {c: i for i, c in enumerate(cols)}
+                    state["hdr"] = {c: i for i, c in enumerate(cols)}
                 continue
-            h = self.sip_hdr
+            h = state["hdr"]
             if len(cols) < len(h) - 1:
                 continue
 
-            def g(name):
+            def g(name, cols=cols, h=h):
                 i = h.get(name)
                 return cols[i] if i is not None and i < len(cols) else ""
 
@@ -331,10 +335,14 @@ class RunReader:
             except ValueError:
                 continue
 
-            def n(name):
+            def n(name, g=g):
                 v = num(g(name))
                 return v if isinstance(v, (int, float)) else 0
 
+            yield ts, g, n
+
+    def poll_sip(self):
+        for ts, g, n in self.sipp_rows(self.sip_tail, self.sip_stats):
             ok_p, fail_p = n("SuccessfulCall(P)"), n("FailedCall(P)")
             v = {
                 "target_rate": n("TargetRate"), "call_rate": n("CallRate(P)"),
@@ -357,6 +365,24 @@ class RunReader:
             self.sip_stats["peak_cps"] = max(self.sip_stats["peak_cps"], float(v["call_rate"]))
             self.sip_stats["last"] = v
             self.s.add(self.run_host, "flt.sip", ts, v)
+
+    def poll_uas(self):
+        """Atendedor (SIPp UAS, DIDs DIRECT-IP): chamadas que o FS entregou a VM de teste."""
+        for ts, g, n in self.sipp_rows(self.uas_tail, self.uas_stats):
+            ok_p, fail_p = n("SuccessfulCall(P)"), n("FailedCall(P)")
+            v = {
+                "call_rate": n("CallRate(P)"), "current_calls": n("CurrentCall"),
+                "received_c": n("TotalCallCreated"), "success_p": ok_p, "failed_p": fail_p,
+                "failed_pct_p": round(fail_p * 100.0 / (ok_p + fail_p), 2) if ok_p + fail_p else 0,
+                "success_c": n("SuccessfulCall(C)"), "failed_c": n("FailedCall(C)"),
+                "failed_unexpected_c": n("FailedUnexpectedMessage(C)"),
+                "failed_recv_timeout_c": n("FailedTimeoutOnRecv(C)"),
+            }
+            ms = sipp_ms(g("CallLength(P)"))
+            if ms is not None:
+                v["call_length_ms"] = ms
+            self.uas_stats["last"] = v
+            self.s.add(self.run_host, "flt.uas", ts, v)
 
     # ------------------------------------------------------------- fases, guard, resultados
     def poll_phases(self):
@@ -448,6 +474,7 @@ class RunReader:
         self.send_info()
         self.poll_metrics()
         self.poll_sip()
+        self.poll_uas()
         self.poll_guard()
         self.poll_sysbench_intervals()
 
@@ -471,6 +498,12 @@ class RunReader:
                       "sip_falha_pct": round(fail * 100.0 / (ok + fail), 2) if ok + fail else 0,
                       "sip_pico_simultaneas": self.sip_stats["peak_cc"],
                       "sip_pico_cps": self.sip_stats["peak_cps"]})
+        uas = self.uas_stats["last"]
+        if uas:
+            r.update({"uas_recebidas": uas["received_c"], "uas_sucesso": uas["success_c"],
+                      "uas_falhas": uas["failed_c"]})
+            if last:
+                r["uas_nao_chegaram"] = max(0, last["total_created"] - uas["received_c"])
         self.s.add(self.run_host, "flt.result", end, r)
 
 
