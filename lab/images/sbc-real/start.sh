@@ -10,6 +10,11 @@
 # producao), com fallback para os do clone. Ambos somente leitura.
 # O banco (schema Flux, usuario fluxuser e dados do laboratorio) e preparado pelo lab.sh no
 # Percona XtraDB Cluster; este script espera o schema antes de subir o FreeSWITCH.
+#
+# Dois modos (LAB_INIT):
+#   direct  (padrao) container Docker: processos iniciados direto, IPs do docker-compose.yml
+#   systemd lab em VMs Debian 12 (lab/vm/roles/sbc.sh): unidades systemd e IPs do inventario
+#           (LAB_DB_VIP, LAB_GEN_IP, LAB_FS_PUB_IPS, LAB_FS_INT_IPS, LAB_DEV_PROFILE...)
 
 set -Eeuo pipefail
 
@@ -25,10 +30,19 @@ LAB_RTP_START=${LAB_RTP_START:-16384}
 LAB_RTP_END=${LAB_RTP_END:-16583}
 LAB_MAC_SIP_PORT=${LAB_MAC_SIP_PORT:-5060}
 LAB_OPENSIPS_LOG_LEVEL=${LAB_OPENSIPS_LOG_LEVEL:-3}
+LAB_INIT=${LAB_INIT:-direct}
+# Enderecos do laboratorio (padrao: redes do docker-compose.yml)
+LAB_GEN_IP=${LAB_GEN_IP:-172.30.177.50}
+LAB_FS_PUB_IPS=${LAB_FS_PUB_IPS:-172.30.177.163 172.30.177.162}
+LAB_FS_INT_IPS=${LAB_FS_INT_IPS:-172.30.4.163 172.30.4.162}
+LAB_DEV_PROFILE=${LAB_DEV_PROFILE:-lab-mac}
+# Sockets 5062 anunciando 127.0.0.1: so para os devices do macOS via Docker Desktop
+LAB_MAC_SOCKETS=${LAB_MAC_SOCKETS:-1}
 
-readonly FLUX_SRC=/opt/flux-src
-readonly FLUX_SCRIPTS=/opt/flux-scripts
-readonly VIP=172.30.4.100
+readonly FLUX_SRC=${LAB_FLUX_SRC_DIR:-/opt/flux-src}
+readonly FLUX_SCRIPTS=${LAB_FLUX_SCRIPTS_DIR:-/opt/flux-scripts}
+readonly TPL_DIR=${LAB_TEMPLATE_DIR:-/opt/flux-lab/sbc-real}
+readonly VIP=${LAB_DB_VIP:-172.30.4.100}
 readonly FS_CONF=/etc/freeswitch
 
 for v in LAB_RTP_START LAB_RTP_END LAB_MAC_SIP_PORT LAB_OPENSIPS_LOG_LEVEL; do
@@ -36,24 +50,42 @@ for v in LAB_RTP_START LAB_RTP_END LAB_MAC_SIP_PORT LAB_OPENSIPS_LOG_LEVEL; do
 done
 [[ ${LAB_FLUX_DB_PASSWORD} =~ ^[A-Za-z0-9]+$ ]] || die "LAB_FLUX_DB_PASSWORD deve ser alfanumerica (vai em URL e XML)"
 [[ ${LAB_FS_CLI_PASSWORD} =~ ^[A-Za-z0-9]+$ ]] || die "LAB_FS_CLI_PASSWORD deve ser alfanumerica"
+[[ ${LAB_INIT} == direct || ${LAB_INIT} == systemd ]] || die "LAB_INIT invalido: ${LAB_INIT} (direct ou systemd)"
+[[ ${LAB_MAC_SOCKETS} == [01] ]] || die "LAB_MAC_SOCKETS deve ser 0 ou 1"
+[[ ${LAB_DEV_PROFILE} =~ ^[A-Za-z0-9_-]+$ ]] || die "LAB_DEV_PROFILE invalido: ${LAB_DEV_PROFILE}"
+for ip in ${VIP} ${LAB_GEN_IP} ${LAB_FS_PUB_IPS} ${LAB_FS_INT_IPS}; do
+    [[ ${ip} =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "IP invalido: ${ip}"
+done
 for d in freeswitch/scripts/flux freeswitch/fs freeswitch/conf/autoload_configs config; do
     [[ -d ${FLUX_SRC}/${d} ]] || die "${FLUX_SRC}/${d} ausente: confira LAB_FLUX_SRC no .env (clone do repositorio sbc)"
 done
 
 db() { MYSQL_PWD=${LAB_FLUX_DB_PASSWORD} mysql -h "${VIP}" -u fluxuser -N -B --connect-timeout=5 flux "$@"; }
 
+# svc UNIDADE COMANDO...: no modo systemd habilita e reinicia a unidade; no Docker executa o comando
+svc() {
+    local unit=$1
+    shift
+    if [[ ${LAB_INIT} == systemd ]]; then
+        systemctl enable "${unit}" >/dev/null 2>&1 || true
+        systemctl restart "${unit}" || die "falha ao iniciar ${unit} (journalctl -u ${unit})"
+    else
+        "$@"
+    fi
+}
+
 # Espera o lab.sh carregar o schema do Flux e os dados do laboratorio (ate 30 min)
 wait_flux_db() {
     local i
     log "aguardando o schema do Flux no banco (${VIP}, usuario fluxuser)"
     for ((i = 0; i < 900; i++)); do
-        if [[ $(db -e "SELECT COUNT(*) FROM sip_profiles WHERE name = 'lab-mac'" 2>/dev/null) == 1 ]]; then
+        if [[ $(db -e "SELECT COUNT(*) FROM sip_profiles WHERE name = '${LAB_DEV_PROFILE}'" 2>/dev/null) == 1 ]]; then
             log "schema do Flux disponivel"
             return 0
         fi
         sleep 2
     done
-    die "schema do Flux nao apareceu em 30 min (rode: lab.sh flux)"
+    die "schema do Flux nao apareceu em 30 min (rode: lab.sh flux ou vmlab.sh flux)"
 }
 
 # ------------------------------------------------------------------ comum (PHP xml_curl + ODBC)
@@ -93,8 +125,8 @@ EOF
     # sem IPv6 no container
     sed -i '/listen \[::1\]:8735/d' /etc/nginx/conf.d/fs.conf
     mkdir -p /run/php
-    php-fpm7.3 -D
-    nginx
+    svc php7.3-fpm php-fpm7.3 -D
+    svc nginx nginx
     log "PHP-FPM 7.3 e nginx (127.0.0.1:8735) ativos"
 }
 
@@ -142,7 +174,14 @@ EOF
     touch "${FS_CONF}/dialplan/flux.xml" "${FS_CONF}/directory/flux.xml" "${FS_CONF}/sip_profiles/flux.xml"
 
     mkdir -p /var/log/freeswitch/json_cdr /var/lib/freeswitch/storage /var/lib/freeswitch/recordings
-    freeswitch -nc -nonat -conf "${FS_CONF}" -log /var/log/freeswitch -db /var/lib/freeswitch/db >/dev/null 2>&1
+    if [[ ${LAB_INIT} == systemd ]]; then
+        # unidade do pacote (freeswitch.service): como root, igual ao container, porque o
+        # PHP/Lua do Flux e o ODBC leem arquivos de root:www-data
+        printf 'USER=root\nGROUP=root\nDAEMON_OPTS="-nonat"\n' > /etc/default/freeswitch
+        svc freeswitch
+    else
+        freeswitch -nc -nonat -conf "${FS_CONF}" -log /var/log/freeswitch -db /var/lib/freeswitch/db >/dev/null 2>&1
+    fi
     local i
     for ((i = 0; i < 60; i++)); do
         if fs_cli -p "${LAB_FS_CLI_PASSWORD}" -x status 2>/dev/null | grep -q 'is ready'; then
@@ -168,37 +207,51 @@ opensips_tables() {
             log "tabela ${tbl} criada (${f##*/})"
         fi
     done
-    # Origens: grupo 10 = operadoras (vm-teste), grupo 20 = pool FreeSWITCH (as duas faces)
+    # Origens: grupo 10 = operadoras (VM de teste), grupo 20 = pool FreeSWITCH (as duas faces)
     # load_balancer grupo 1 (chamadas de operadora) -> perfil default (5070, IP publico);
     #   o event socket tambem pelo publico: a ACL "event" do Flux libera opensips_domain
-    # dispatcher setid 2 (REGISTER e chamadas dos devices) -> perfil lab-mac (5080, interno)
+    # dispatcher setid 2 (REGISTER e chamadas dos devices) -> perfil dos devices (5080, interno)
+    local ip rows="" lb="" ds=""
+    rows="  (10, '${LAB_GEN_IP}', 32, 0, 'any', 'flux-lab')"
+    for ip in $(printf '%s\n' ${LAB_FS_PUB_IPS} ${LAB_FS_INT_IPS} | awk '!seen[$0]++'); do
+        rows+=$',\n'"  (20, '${ip}', 32, 0, 'any', 'flux-lab')"
+    done
+    for ip in ${LAB_FS_PUB_IPS}; do
+        lb+="${lb:+$',\n'}  (1, 'sip:${ip}:5070', 'channels=fs://:${LAB_FS_CLI_PASSWORD}@${ip}:8021', 1, 'flux-lab')"
+    done
+    for ip in ${LAB_FS_INT_IPS}; do
+        ds+="${ds:+$',\n'}  (2, 'sip:${ip}:5080', 0, '1', 0, 'flux-lab')"
+    done
     db <<SQL
 DELETE FROM address WHERE context_info = 'flux-lab';
 INSERT INTO address (grp, ip, mask, port, proto, context_info) VALUES
-  (10, '172.30.177.50', 32, 0, 'any', 'flux-lab'),
-  (20, '172.30.177.163', 32, 0, 'any', 'flux-lab'),
-  (20, '172.30.177.162', 32, 0, 'any', 'flux-lab'),
-  (20, '172.30.4.163', 32, 0, 'any', 'flux-lab'),
-  (20, '172.30.4.162', 32, 0, 'any', 'flux-lab');
+${rows};
 DELETE FROM load_balancer WHERE description = 'flux-lab';
 INSERT INTO load_balancer (group_id, dst_uri, resources, probe_mode, description) VALUES
-  (1, 'sip:172.30.177.163:5070', 'channels=fs://:${LAB_FS_CLI_PASSWORD}@172.30.177.163:8021', 1, 'flux-lab'),
-  (1, 'sip:172.30.177.162:5070', 'channels=fs://:${LAB_FS_CLI_PASSWORD}@172.30.177.162:8021', 1, 'flux-lab');
+${lb};
 DELETE FROM dispatcher WHERE description = 'flux-lab';
 INSERT INTO dispatcher (setid, destination, state, weight, priority, description) VALUES
-  (2, 'sip:172.30.4.163:5080', 0, '1', 0, 'flux-lab'),
-  (2, 'sip:172.30.4.162:5080', 0, '1', 0, 'flux-lab');
+${ds};
 SQL
 }
 
 setup_opensips() {
     opensips_tables
     install -d -m 0755 /etc/opensips /run/opensips
+    # mpath pela arquitetura da maquina; sem os sockets do macOS fora do Docker; um socket
+    # por IP:porta quando a VM tem uma interface so (IP publico = interno)
     sed -e "s#@PUB_IP@#${LAB_PUB_IP}#g" -e "s#@INT_IP@#${LAB_INT_IP}#g" \
         -e "s#@MAC_SIP_PORT@#${LAB_MAC_SIP_PORT}#g" -e "s#@LOG_LEVEL@#${LAB_OPENSIPS_LOG_LEVEL}#g" \
         -e "s#@DB_URL@#mysql://fluxuser:${LAB_FLUX_DB_PASSWORD}@${VIP}:3306/flux#g" \
-        /opt/flux-lab/sbc-real/opensips.cfg.in > /etc/opensips/opensips.cfg
+        -e "s#/usr/lib/x86_64-linux-gnu/opensips/#/usr/lib/$(uname -m)-linux-gnu/opensips/#" \
+        "${TPL_DIR}/opensips.cfg.in" \
+        | awk -v mac="${LAB_MAC_SOCKETS}" '/^socket=.*:5062 as / && mac == 0 { next }
+                                           /^socket=/ && seen[$0]++ { next } { print }' \
+        > /etc/opensips/opensips.cfg
     chmod 0640 /etc/opensips/opensips.cfg
+    if [[ ${LAB_INIT} == systemd ]]; then
+        chgrp opensips /etc/opensips/opensips.cfg
+    fi
     cat > /etc/opensips/opensips-cli.cfg <<'EOF'
 [default]
 log_level: WARNING
@@ -213,16 +266,31 @@ fifo_file: /run/opensips/opensips_fifo
 EOF
     opensips -C -f /etc/opensips/opensips.cfg >/var/log/opensips-check.log 2>&1 \
         || die "opensips.cfg invalido; veja /var/log/opensips-check.log"
-    opensips -F -f /etc/opensips/opensips.cfg -m 256 -M 32 >>/var/log/opensips.log 2>&1 &
+    if [[ ${LAB_INIT} == systemd ]]; then
+        # unidade do pacote em primeiro plano (-F): o log em stderr vai para o journal
+        printf 'S_MEMORY=256\nP_MEMORY=32\n' > /etc/default/opensips
+        install -d -m 0755 /etc/systemd/system/opensips.service.d
+        cat > /etc/systemd/system/opensips.service.d/flux-lab.conf <<'EOF'
+[Service]
+Type=simple
+PIDFile=
+ExecStart=
+ExecStart=/usr/sbin/opensips -F -f /etc/opensips/opensips.cfg -m $S_MEMORY -M $P_MEMORY
+EOF
+        systemctl daemon-reload
+        svc opensips
+    else
+        opensips -F -f /etc/opensips/opensips.cfg -m 256 -M 32 >>/var/log/opensips.log 2>&1 &
+    fi
     local i
     for ((i = 0; i < 30; i++)); do
         if opensips-cli -x mi version >/dev/null 2>&1; then
-            log "OpenSIPS $(opensips -V | awk 'NR == 1 { print $3 }') ativo em ${LAB_PUB_IP}:5060, ${LAB_INT_IP}:5060 e :5062 (devices do macOS)"
+            log "OpenSIPS $(opensips -V | awk 'NR == 1 { print $3 }') ativo em ${LAB_PUB_IP}:5060 e ${LAB_INT_IP}:5060$( ((LAB_MAC_SOCKETS)) && printf ' e :5062 (devices do macOS)')"
             return 0
         fi
         sleep 1
     done
-    log "AVISO: OpenSIPS sem resposta no MI; veja /var/log/opensips.log"
+    log "AVISO: OpenSIPS sem resposta no MI; veja /var/log/opensips.log (Docker) ou journalctl -u opensips"
 }
 
 wait_flux_db

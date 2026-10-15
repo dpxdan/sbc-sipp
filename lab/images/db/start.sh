@@ -21,6 +21,7 @@ conf_dir=/etc/mysql/mysql.conf.d
 [[ -d ${conf_dir} ]] || conf_dir=/etc/mysql/conf.d
 sed -e "s|@SERVER_ID@|${LAB_DB_NODE}|" -e "s|@WSREP_PROVIDER@|${provider}|" \
     -e "s|@NODE_ADDR@|${LAB_DB_ADDR}|" -e "s|@NODE_NAME@|$(hostname)|" \
+    -e "s|@CLUSTER_ADDR@|172.30.4.161,172.30.4.164|" \
     /opt/flux-lab/db/zz-lab.cnf.in > "${conf_dir}/zz-lab.cnf"
 
 # Credencial da coleta (usuario somente leitura), lida pelo usuario SSH loadtest

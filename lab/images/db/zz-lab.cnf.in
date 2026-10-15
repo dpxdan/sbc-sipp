@@ -1,4 +1,5 @@
-# Laboratorio STFC: Percona XtraDB Cluster 8.4 (2 nos), gerado pelo start.sh
+# Laboratorio STFC: Percona XtraDB Cluster 8.4 (2 nos), gerado pelo start.sh (Docker)
+# ou pelo lab/vm/roles/db.sh (VMs)
 [mysqld]
 server-id=@SERVER_ID@
 bind-address=0.0.0.0
@@ -18,7 +19,7 @@ plugin-load-add=auth_socket.so
 
 wsrep_provider=@WSREP_PROVIDER@
 wsrep_cluster_name=stfc-lab
-wsrep_cluster_address=gcomm://172.30.4.161,172.30.4.164
+wsrep_cluster_address=gcomm://@CLUSTER_ADDR@
 wsrep_node_address=@NODE_ADDR@
 wsrep_node_name=@NODE_NAME@
 wsrep_sst_method=xtrabackup-v2

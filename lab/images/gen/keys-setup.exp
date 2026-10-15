@@ -1,15 +1,27 @@
 #!/usr/bin/expect -f
 #
 # Laboratorio STFC: "flux-loadtest.sh keys setup" respondendo, em cada servidor, a
-# senha do usuario loadtest (gerada pelo lab.sh em /etc/flux-loadtest/loadtest.pass).
+# senha do usuario loadtest (gerada pelo lab.sh ou pelo vmlab.sh).
 # So para o laboratorio: em producao a senha e digitada pelo operador.
+#
+# Caminhos (variaveis de ambiente; padrao: vm-teste do lab Docker):
+#   FLT_BIN   flux-loadtest.sh          FLT_CONF  loadtest.conf
+#   FLT_PASS  arquivo com a senha do usuario loadtest
+
+proc envdef {name def} {
+    if {[info exists ::env($name)] && $::env($name) ne ""} { return $::env($name) }
+    return $def
+}
+set bin  [envdef FLT_BIN  /opt/flux-loadtest/flux-loadtest.sh]
+set conf [envdef FLT_CONF /etc/flux-loadtest/loadtest.conf]
+set pass [envdef FLT_PASS /etc/flux-loadtest/loadtest.pass]
 
 set timeout 60
-set fh [open /etc/flux-loadtest/loadtest.pass r]
+set fh [open $pass r]
 set pw [string trim [read $fh]]
 close $fh
 
-spawn /opt/flux-loadtest/flux-loadtest.sh keys setup -c /etc/flux-loadtest/loadtest.conf -y
+spawn $bin keys setup -c $conf -y
 expect {
     -re {password: ?$} { send -- "$pw\r"; exp_continue }
     timeout { puts "\n\[lab\] tempo esgotado esperando o keys setup"; exit 1 }

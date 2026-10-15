@@ -61,7 +61,15 @@ require_docker() {
     docker compose version >/dev/null 2>&1 || die "docker compose indisponivel"
 }
 
-rand() { od -An -N16 -tx1 /dev/urandom | tr -d ' \n'; }
+# shellcheck source=lab/lib/flux-db.sh
+source "${LAB_DIR}/lib/flux-db.sh"
+# Valores do laboratorio em Docker (redes do docker-compose.yml)
+FLUXDB_OUT_DIR=${OUT_DIR}
+FLUXDB_NET_PATTERN='172.30.%'
+FLUXDB_OPENSIPS_DOMAIN=172.30.177.163
+FLUXDB_UAS_ADDR=${LAB_UAS_ADDR}
+FLUXDB_DEV_PROFILE=lab-mac
+FLUXDB_DEV_EXT_RTP_IP=127.0.0.1
 
 # Acrescenta CHAVE=valor ao .env se ausente (migra .env de versoes anteriores do laboratorio)
 env_add() {
@@ -310,108 +318,19 @@ root_sql() {
         mysql -uroot --default-character-set=utf8 "$@"
 }
 
-# Ramais do laboratorio: senhas estaveis entre subidas (out/sip_devices.csv, so local).
-# out/sip_devices.sipp.csv: mesmo conteudo no formato -inf do SIPp (lab/sip/register.xml).
+# Ramais e SQL do laboratorio: lab/lib/flux-db.sh (comum ao lab em VMs)
 devices_file() {
-    local n i f="${OUT_DIR}/sip_devices.csv"
-    n=$(env_get LAB_SIP_DEVICES)
-    n=${n:-20}
-    if [[ ! ${n} =~ ^[0-9]+$ ]] || ((n < 1 || n > 900)); then
-        die "LAB_SIP_DEVICES invalido (1-900)"
-    fi
-    if [[ ! -s ${f} ]] || (( $(grep -c '^[0-9]' "${f}") != n )); then
-        (
-            umask 077
-            printf 'usuario;senha;did\n'
-            for ((i = 0; i < n; i++)); do
-                printf '%d;%s;5511300%05d\n' $((1000 + i)) "$(rand | cut -c1-16)" $((1000 + i))
-            done
-        ) > "${f}"
-        log "${n} ramais gerados em ${f}" >&2
-    fi
-    (
-        umask 077
-        printf 'SEQUENTIAL\n'
-        awk -F';' 'NR > 1 && $1 ~ /^[0-9]+$/ { printf "%s;[authentication username=%s password=%s]\n", $1, $1, $2 }' "${f}"
-    ) > "${OUT_DIR}/sip_devices.sipp.csv"
-    printf '%s' "${f}"
+    fluxdb_devices_file "$(env_get LAB_SIP_DEVICES)"
 }
 
 flux_seed_sql() {
-    local devices=$1 ndids=$2 vip_pass
-    vip_pass=$(env_get LAB_FLUX_DB_PASSWORD)
-    cat <<SQL
--- gerado pelo lab.sh: usuario da aplicacao e dados do laboratorio (idempotente)
--- 172.30.% = servidores do laboratorio; 127.0.0.1/localhost = DEFINER dos triggers e views do schema
-CREATE USER IF NOT EXISTS 'fluxuser'@'172.30.%' IDENTIFIED WITH mysql_native_password BY '${vip_pass}';
-ALTER USER 'fluxuser'@'172.30.%' IDENTIFIED WITH mysql_native_password BY '${vip_pass}';
-GRANT ALL PRIVILEGES ON flux.* TO 'fluxuser'@'172.30.%';
-CREATE USER IF NOT EXISTS 'fluxuser'@'127.0.0.1' IDENTIFIED WITH mysql_native_password BY '${vip_pass}';
-ALTER USER 'fluxuser'@'127.0.0.1' IDENTIFIED WITH mysql_native_password BY '${vip_pass}';
-GRANT ALL PRIVILEGES ON flux.* TO 'fluxuser'@'127.0.0.1';
-CREATE USER IF NOT EXISTS 'fluxuser'@'localhost' IDENTIFIED WITH mysql_native_password BY '${vip_pass}';
-ALTER USER 'fluxuser'@'localhost' IDENTIFIED WITH mysql_native_password BY '${vip_pass}';
-GRANT ALL PRIVILEGES ON flux.* TO 'fluxuser'@'localhost';
-USE flux;
--- OpenSIPS na frente do pool: ACL "default" e "event" do FreeSWITCH (fs/lib/flux.xml.php)
--- o PHP (fs/lib/flux.lib.php) so le group_title IN ('global','opensips',...); no schema 6.4
--- estas chaves estao em 'signup' e a ACL nao incluiria o OpenSIPS.
--- IP publico do OpenSIPS: origem das chamadas de operadora (load_balancer) e do event socket
-UPDATE \`system\` SET value = '0', group_title = 'opensips' WHERE name = 'opensips';
-UPDATE \`system\` SET value = '172.30.177.163', group_title = 'opensips' WHERE name = 'opensips_domain';
--- conta de teste (id 2 do schema, pos-paga): sem limite de canais e com credito para nao
--- cair em NO_SUFFICIENT_FUND (o dialplan confere o saldo mesmo nas chamadas de entrada)
-UPDATE accounts SET maxchannels = 0, status = 0, deleted = 0, expiry = '2046-07-25 11:26:24',
-  credit_limit = 100000000 WHERE id = 2;
-DELETE FROM sip_devices WHERE username BETWEEN '1000' AND '1999' AND accountid = 2;
-SQL
-    # perfil default como em producao: operadoras (load_balancer) na porta 5070 do IP
-    # publico, com a midia no mesmo IP (pub_ip_v4 vem do vars.xml gerado pelo start.sh)
-    cat <<'SQL'
-UPDATE sip_profiles SET sip_port = '5070', sip_ip = '$${pub_ip_v4}', status = 0,
-  profile_data = JSON_SET(profile_data, '$."rtp-ip"', '$${pub_ip_v4}', '$."ext-rtp-ip"', '$${pub_ip_v4}',
-    '$."ext-sip-ip"', '$${pub_ip_v4}', '$."presence-hosts"', '$${domain},$${pub_ip_v4}')
-  WHERE id = 1;
-SQL
-    # [lab] ramais dos devices do macOS (perfil lab-mac, dispatcher setid 2)
-    awk -F';' 'NR > 1 && $1 ~ /^[0-9]+$/ {
-        printf "INSERT INTO sip_devices (username, sip_profile_id, reseller_id, accountid, dir_params, dir_vars, status, creation_date, last_modified_date, call_waiting) VALUES (%c%s%c, 100, 0, 2, %c{\"password\":\"%s\",\"vm-enabled\":\"true\",\"vm-password\":\"%s\",\"vm-mailto\":\"\",\"vm-attach-file\":\"false\",\"vm-keep-local-after-email\":\"true\",\"vm-email-all-messages\":\"false\"}%c, %c{\"effective_caller_id_name\":\"Lab %s\",\"effective_caller_id_number\":\"%s\"}%c, 0, NOW(), NOW(), 0);\n",
-            39, $1, 39, 39, $2, substr($1, 1, 4), 39, 39, $1, $1, 39 }' "${devices}"
-    cat <<'SQL'
-DELETE FROM dids WHERE accountid = 2 AND (number LIKE '55519%' OR number LIKE '5511300%');
-SQL
-    # DIRECT-IP (call_type 2): DIDs do teste de carga -> atendedor SIPp da vm-teste. O FS faz
-    # bridge sofia/<perfil>/<DID>@<extensions> (custom_inbound_2 do flux.xml.lua)
-    awk -v n="${ndids}" -v dst="${LAB_UAS_ADDR}" 'BEGIN {
-        cols = "INSERT INTO dids (number, accountid, inc, extensions, status, call_type, leg_timeout, product_id, always, always_destination, user_busy, user_busy_destination, user_not_registered, user_not_registered_destination, no_answer, no_answer_destination, failover_extensions, last_modified_date) VALUES "
-        for (i = 0; i < n; i++) {
-            if (i % 1000 == 0) printf "%s%s", (i ? ";\n" : ""), cols; else printf ","
-            printf "(%c55519%08d%c,2,60,%c%s%c,0,2,30,0,0,%c%c,0,%c%c,0,%c%c,0,%c%c,%c%c,NOW())", 39, i, 39, 39, dst, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39
-        }
-        if (n > 0) printf ";\n"
-    }'
-    # DID-LOCAL (call_type 0): um DID por ramal do macOS
-    awk -F';' 'NR > 1 && $1 ~ /^[0-9]+$/ {
-        printf "INSERT INTO dids (number, accountid, inc, extensions, status, call_type, leg_timeout, product_id, always, always_destination, user_busy, user_busy_destination, user_not_registered, user_not_registered_destination, no_answer, no_answer_destination, failover_extensions, last_modified_date) VALUES (%c%s%c,2,60,%c%s%c,0,0,30,0,0,%c%c,0,%c%c,0,%c%c,0,%c%c,%c%c,NOW());\n",
-            39, $3, 39, 39, $1, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39 }' "${devices}"
-    # por ultimo: o start.sh do SBC espera este perfil para subir o FreeSWITCH.
-    # [lab] perfil dos devices do macOS: IP interno (dispatcher setid 2), midia anunciada
-    # em 127.0.0.1 (portas de RTP publicadas pelo Docker Desktop)
-    cat <<'SQL'
-DELETE FROM sip_profiles WHERE id = 100 OR name = 'lab-mac';
-INSERT INTO sip_profiles (id, name, sip_ip, sip_port, profile_data, created_date, last_modified_date, accountid, status)
-  SELECT 100, 'lab-mac', '$${local_ip_v4}', '5080',
-    JSON_SET(profile_data, '$."rtp-ip"', '$${local_ip_v4}', '$."ext-rtp-ip"', '127.0.0.1',
-      '$."ext-sip-ip"', '$${local_ip_v4}', '$."presence-hosts"', '$${domain},$${local_ip_v4}'),
-    NOW(), NOW(), 0, 0
-  FROM sip_profiles WHERE id = 1;
-SQL
+    fluxdb_seed_sql "$1" "$2" "$(env_get LAB_FLUX_DB_PASSWORD)"
 }
 
 cmd_flux() {
     require_docker
     [[ $(sbc_target) == sbc-real ]] || { log "LAB_SBC_TARGET=$(sbc_target): banco do Flux nao e necessario"; return 0; }
-    local src f n devices ndids errlog="${OUT_DIR}/flux-schema.log"
+    local src n devices ndids errlog="${OUT_DIR}/flux-schema.log"
     src=$(env_get LAB_FLUX_SRC)
     [[ -f ${src}/database/flux-6.4.sql ]] || die "schema do Flux nao encontrado em ${src}/database"
     install -d -m 0700 "${OUT_DIR}"
@@ -419,20 +338,7 @@ cmd_flux() {
         || die "banco indisponivel (veja: $0 status)"
     if [[ ${n} == 0 ]]; then
         log "carregando o schema do Flux de ${src}/database (como o flux_install.sh; erros em ${errlog})"
-        : > "${errlog}"
-        root_sql -e "CREATE DATABASE IF NOT EXISTS flux"
-        for f in database/flux-6.4.sql database/flux-tables.sql database/flux-6.4.1.sql database/flux-views.sql \
-                 web_interface/flux/addons/plugins/ringgroup/database/ringgroup_1.0.0.sql \
-                 web_interface/flux/addons/plugins/language_portuguese/database/language_portuguese_2.0.0.sql; do
-            [[ -r ${src}/${f} ]] || { warn "ausente: ${f}"; continue; }
-            printf '== %s\n' "${f}" >> "${errlog}"
-            root_sql -f flux < "${src}/${f}" >> "${errlog}" 2>&1 || true
-        done
-        # migracoes na ordem do run_database_migrations (update-DD-MM-AAAA.sql por data)
-        while IFS= read -r f; do
-            printf '== %s\n' "${f#"${src}/"}" >> "${errlog}"
-            root_sql -f flux < "${f}" >> "${errlog}" 2>&1 || true
-        done < <(find "${src}/database/updates" -name 'update-*.sql' | sort -t '-' -k 4,4n -k 3,3n -k 2,2n)
+        fluxdb_load_schema "${src}" "${errlog}" root_sql
         log "schema carregado: $(root_sql -N -B -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'flux'") tabelas; $(grep -c '^ERROR' "${errlog}" || true) erros ignorados (-f, como no instalador)"
     else
         log "schema do Flux ja existe no cluster"
