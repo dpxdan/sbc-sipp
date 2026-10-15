@@ -137,7 +137,7 @@ Estado das VMs (serviços, cluster, VIP, perfis SIP):
 | `/etc/sudoers.d/90-flux-lab-admin` | sudo sem senha para o `SSH_ADMIN_USER` (só se o sudo pedia senha) |
 | `/etc/sudoers.d/flux-loadtest` | SBC: `loadtest` pode rodar `fs_cli` e `opensips-cli` (coleta) |
 | `/etc/mysql/flux-loadtest.cnf` | Bancos: credencial somente leitura da coleta (0600, dono `loadtest`) |
-| `/etc/default/freeswitch`, `/etc/default/opensips`, `opensips.service.d/flux-lab.conf` | FreeSWITCH como root (igual ao container) e OpenSIPS em primeiro plano, com log no journal |
+| `/etc/systemd/system/freeswitch.service`, `/etc/default/opensips`, `opensips.service.d/flux-lab.conf` | FreeSWITCH como root (igual ao container; os pacotes da SignalWire não trazem unidade) e OpenSIPS em primeiro plano, com log no journal |
 
 Na primeira execução do papel `db`, o datadir do nó é recriado. O papel recusa a operação se
 já existir o schema `flux` nele, para não apagar dados que não sejam do laboratório.
@@ -153,10 +153,31 @@ já existir o schema `flux` nele, para não apagar dados que não sejam do labor
 | Zabbix | Containers 7.2.3 + PostgreSQL 16 | Servidor existente |
 | Reinício | `lab.sh up` recria tudo | Os serviços sobem no boot. Com os dois bancos parados, o bootstrap é manual no nó com `safe_to_bootstrap: 1` |
 
+## Validação (2026-10-15)
+
+Feita com 6 containers Debian 12 com systemd (`jrei/systemd-debian:12`, privilegiados) numa
+rede própria, uma interface por "VM" (IP público = interno). O `vmlab.sh` rodou de dentro do
+"servidor de testes", com o fork clonado de um caminho local e os scripts do `sbc01`.
+
+| Etapa | Resultado |
+|---|---|
+| `init`, `bootstrap -y` | Senhas e chave geradas; chaves de host gravadas, SSH por chave e `sudo -n` nas 5 VMs (a chave pública e o sudo foram pré-instalados: o `ssh-copy-id` pede senha) |
+| `gen`, `flux-src`, `common` | Pacotes, `git clone`, hostname e `/etc/hosts` nas 5 VMs |
+| `db` | PXC 8.4.10: bootstrap no nó 1, SST no nó 2 (`Synced`), nó 1 de volta a membro comum, keepalived com o VIP no nó 1. Segunda execução: nada recriado, 100 mil DIDs intactos |
+| `flux` | 158 tabelas, 0 erros; `did_call_types` 7 e 8 corretos (ver abaixo) |
+| `web`, `sbc` | nginx 1.22.1 + PHP-FPM 7.3.33; FreeSWITCH 1.11.3 (perfis `default` 5070 e `lab-dev` 5080) nos dois SBC; OpenSIPS 3.6.9 no `sbc-stfc-1` |
+| `conf`, `keys`, `smoke` | `check` com os dois FS `ready` e o `load_balancer` nos dois nós; `smoke` 1/1, chamada recebida pelo atendedor |
+| `run -t sip -r 2 -H 10 -w 40` | 71/71 no originador e no atendedor, nenhum limite atingido |
+| `run -t sip,web -r 3 -H 15 -w 45` | 83/83 chamadas sem falha; interrompido pelo guard por CPU (os 6 containers dividem as 4 vCPUs da VM do Docker) |
+
+Ajustes que a validação trouxe (valem também para o lab Docker):
+- **Ordem das migrações (`database/updates`):** passou a usar só o nome do arquivo. Com um `-` no caminho do clone (ex.: `/opt/flux-src`), o `sort` ordenava por mês e dia, sem o ano.
+- **Auto_increment na carga do schema:** num PXC de 2 nós, o Galera usa `auto_increment_increment=2` e um offset por nó, e ignora `SET SESSION`. O id gerado pelo `ringgroup_1.0.0.sql` (7) virava 8 e colidia com o `update-12-06-2025.sql`. Durante a carga, `wsrep_auto_increment_control` fica desligado com sequência 1/1, e os valores são restaurados no fim. Uma instalação do Flux direto num PXC tem o mesmo risco.
+- **Unidade do FreeSWITCH:** os pacotes da SignalWire não trazem unidade systemd; o `start.sh` cria `/etc/systemd/system/freeswitch.service`.
+
 ## Limitações
 
-- A validação de ponta a ponta (cluster, VIP, `smoke` e `run`) depende das VMs. Os scripts
-  foram verificados com `bash -n`/`shellcheck` e pelos testes do lab Docker, que usa os mesmos
-  modelos e o mesmo seed.
+- Falta validar em VMs reais: VRRP entre hosts, firewall, duas interfaces por VM e o
+  `ssh-copy-id`/sudo com senha do `bootstrap`.
 - O `vmlab.sh` não remove o que instalou. Para recomeçar, recrie as VMs ou apague
   `/etc/flux-lab/db-initialized` e o datadir nos bancos.

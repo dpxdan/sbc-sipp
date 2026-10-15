@@ -34,4 +34,8 @@ root    hard nofile 65536
 *       soft nofile 65536
 *       hard nofile 65536
 EOF
-log "papel gen pronto: $(sipp -v 2>&1 | grep -o 'SIPp v[^ ]*' | head -1), $(wrk -v 2>&1 | head -1 | awk '{print $1, $2}')"
+sipp_v=$(sipp -v 2>&1 || true)
+wrk_v=$(wrk -v 2>&1 || true)
+[[ ${sipp_v} =~ (SIPp v[^[:space:]]+) ]] && sipp_v=${BASH_REMATCH[1]} || sipp_v="SIPp ?"
+wrk_v=${wrk_v%%$'\n'*}
+log "papel gen pronto: ${sipp_v}, ${wrk_v%% \[*}"

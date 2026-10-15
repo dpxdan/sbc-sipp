@@ -54,20 +54,46 @@ fluxdb_schema_files() {
 # Carrega o schema e as migracoes com "-f" (erros ignorados, como no instalador) usando a
 # funcao SQLFN do chamador (ex.: root_sql), que repassa os argumentos ao cliente mysql.
 fluxdb_load_schema() {
-    local src=$1 errlog=$2 sqlfn=$3 f
+    local src=$1 errlog=$2 sqlfn=$3 f ai="" ctl inc off
     [[ -f ${src}/database/flux-6.4.sql ]] || die "schema do Flux nao encontrado em ${src}/database"
     : > "${errlog}"
-    "${sqlfn}" -e "CREATE DATABASE IF NOT EXISTS flux"
+    "${sqlfn}" -e "CREATE DATABASE IF NOT EXISTS flux" < /dev/null
+    # Percona XtraDB Cluster: o Galera usa auto_increment_increment = numero de nos e um offset
+    # por no (wsrep_auto_increment_control, que ignora SET SESSION). Os ids gerados variariam
+    # com o no da carga e colidiriam com migracoes de id fixo (did_call_types 7 do ringgroup x
+    # 8 do update-12-06-2025). Durante a carga so este cliente escreve: sequencia 1/1 no no e
+    # restauracao no fim. Fora do PXC a consulta falha e nada muda.
+    ai=$("${sqlfn}" -N -B -e "SELECT @@global.wsrep_auto_increment_control, @@global.auto_increment_increment, @@global.auto_increment_offset" < /dev/null 2>/dev/null) || ai=""
+    if [[ ${ai} =~ ^[01][[:space:]]+[0-9]+[[:space:]]+[0-9]+$ ]]; then
+        "${sqlfn}" -e "SET GLOBAL wsrep_auto_increment_control = OFF; SET GLOBAL auto_increment_increment = 1; SET GLOBAL auto_increment_offset = 1" < /dev/null
+    else
+        ai=""
+    fi
     while IFS= read -r f; do
         [[ -r ${src}/${f} ]] || { warn "ausente: ${f}"; continue; }
         printf '== %s\n' "${f}" >> "${errlog}"
         "${sqlfn}" -f flux < "${src}/${f}" >> "${errlog}" 2>&1 || true
     done < <(fluxdb_schema_files)
-    # migracoes na ordem do run_database_migrations (update-DD-MM-AAAA.sql por data)
+    # migracoes na ordem do run_database_migrations (update-DD-MM-AAAA.sql por data). A
+    # ordenacao usa so o nome do arquivo: um "-" no caminho (ex.: /opt/flux-src) deslocaria
+    # os campos do sort.
     while IFS= read -r f; do
-        printf '== %s\n' "${f#"${src}/"}" >> "${errlog}"
-        "${sqlfn}" -f flux < "${f}" >> "${errlog}" 2>&1 || true
-    done < <(find "${src}/database/updates" -name 'update-*.sql' | sort -t '-' -k 4,4n -k 3,3n -k 2,2n)
+        printf '== database/updates/%s\n' "${f}" >> "${errlog}"
+        "${sqlfn}" -f flux < "${src}/database/updates/${f}" >> "${errlog}" 2>&1 || true
+    done < <(fluxdb_update_files "${src}")
+    if [[ -n ${ai} ]]; then
+        read -r ctl inc off <<< "${ai}"
+        "${sqlfn}" -e "SET GLOBAL auto_increment_increment = ${inc}; SET GLOBAL auto_increment_offset = ${off}; SET GLOBAL wsrep_auto_increment_control = ${ctl}" < /dev/null \
+            || warn "nao foi possivel restaurar o auto_increment do cluster (${ai})"
+    fi
+}
+
+# Nomes update-DD-MM-AAAA.sql em ordem de data (ano, mes, dia)
+fluxdb_update_files() {
+    local f
+    for f in "$1"/database/updates/update-*.sql; do
+        [[ -f ${f} ]] && printf '%s\n' "${f##*/}"
+    done | sort -t '-' -k 4,4n -k 3,3n -k 2,2n
 }
 
 # fluxdb_seed_sql DEVICES NDIDS SENHA_FLUXUSER -> SQL idempotente dos dados do laboratorio
