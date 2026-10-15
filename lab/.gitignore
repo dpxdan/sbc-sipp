@@ -1,3 +1,5 @@
 # Senhas e configuracao gerados pelo lab.sh, resultados dos testes
 .env
 out/
+# Laboratorio em VMs: configuracao local (inventario) do vmlab.sh
+vm/vmlab.conf

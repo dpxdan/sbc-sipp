@@ -1,0 +1,76 @@
+# lab/vm/vmlab.conf - laboratorio STFC em VMs Debian 12, sem Docker (WEB-1437)
+#
+# Copie para lab/vm/vmlab.conf (fora do git) e ajuste. Formato CHAVE=valor, sem comandos.
+# O vmlab.sh roda no servidor de testes (como root) e configura as 5 VMs por SSH.
+
+# ------------------------------------------------------------------ acesso as VMs
+# Usuario com sudo nas 5 VMs. O "vmlab.sh bootstrap" instala a chave do orquestrador nele
+# (pede a senha uma vez por VM) e, se o sudo pedir senha, libera sudo sem senha para ele.
+SSH_ADMIN_USER=admin
+SSH_PORT=22
+
+# ------------------------------------------------------------------ inventario
+# Servidor de testes (esta maquina): IP pelo qual OpenSIPS e FreeSWITCH alcancam o
+# originador e o atendedor (DIDs DIRECT-IP). Vai no grupo 10 (operadoras) do OpenSIPS.
+GEN_IP=10.10.0.50
+# Demais VMs: "IP_PUBLICO IP_INTERNO". Com uma interface so, repita o mesmo IP.
+#   publico = face das operadoras (OpenSIPS 5060, FreeSWITCH perfil default 5070, RTP)
+#   interno = cluster, VIP, event socket, perfil dos devices (5080)
+HOST_SBC1="10.10.0.163 10.10.1.163"
+HOST_SBC2="10.10.0.162 10.10.1.162"
+HOST_DB1="10.10.0.161 10.10.1.161"
+HOST_DB2="10.10.0.164 10.10.1.164"
+HOST_WEB="10.10.0.165 10.10.1.165"
+# Nomes dos servidores (mesmos do STFC). SET_HOSTNAME=1 aplica com hostnamectl.
+NAME_SBC1=sbc-stfc-1
+NAME_SBC2=sbc-stfc-02
+NAME_DB1=banco-master-sbc-stfc
+NAME_DB2=banco-slave-stfc
+NAME_WEB=sbc-stfc-interfaceweb
+SET_HOSTNAME=1
+
+# ------------------------------------------------------------------ banco
+# VIP do keepalived: IP livre na rede interna (os servidores usam o banco por ele)
+DB_VIP=10.10.1.100
+DB_VIP_PREFIX=24
+# virtual_router_id do VRRP (1-255), unico na rede
+VRRP_ROUTER_ID=61
+# Host pattern do MySQL para os usuarios da aplicacao (cobre os IPs das VMs)
+NET_PATTERN=10.10.%
+
+# ------------------------------------------------------------------ Flux
+# Fork do repositorio sbc: clonado neste servidor e distribuido para os SBC.
+# Repositorio privado: chave de deploy em /root/.ssh (URL git@...) ou credencial do git.
+FLUX_GIT_URL=git@github.com:dpxdan/sbc.git
+FLUX_GIT_REF=master
+FLUX_SRC_DIR=/opt/flux-src
+# Scripts Lua do FreeSWITCH de producao (copia de sbc01/freeswitch/scripts). Vazio: usa
+# os do clone (freeswitch/scripts).
+FLUX_SCRIPTS_DIR=
+# Token da SignalWire (pacotes do FreeSWITCH): arquivo 0600 so com o token. Vai pelo stdin
+# do SSH para os SBC e e apagado de la ao fim da instalacao.
+SIGNALWIRE_TOKEN_FILE=/root/.config/flux-lab/signalwire.token
+
+# ------------------------------------------------------------------ dados e SIP
+SIP_DEVICES=20
+DIDS=100000
+# Atendedor do flux-loadtest neste servidor (destino dos DIDs DIRECT-IP)
+UAS_PORT=5090
+# Faixa de RTP dos FreeSWITCH
+RTP_START=16384
+RTP_END=32768
+
+# ------------------------------------------------------------------ estado e flux-loadtest
+# Senhas geradas pelo "vmlab.sh init" (0600) e arquivos do flux-loadtest
+STATE_DIR=/etc/flux-loadtest/vmlab
+LOADTEST_CONF_DIR=/etc/flux-loadtest
+
+# ------------------------------------------------------------------ Zabbix existente
+# Vazio = sem Zabbix. Com ZABBIX_API_URL e o token, o "vmlab.sh zabbix" importa os templates
+# e cria os hosts (flux-loadtest.sh zabbix setup --import-template).
+ZABBIX_SERVER=
+ZABBIX_PORT=10051
+ZABBIX_HOST_PREFIX=lab-
+ZABBIX_API_URL=
+ZABBIX_API_TOKEN_FILE=
+ZABBIX_TLS_INSECURE=0
