@@ -102,9 +102,11 @@ Consequências para o teste:
 | `zabbix/flux-loadtest-templates.yaml` | Templates no formato do Zabbix 7.2 (produção: 7.2.3; gerado, não editar à mão) |
 | `zabbix/gen_templates.py` | Gerador dos templates a partir das colunas do coletor |
 | `scenarios/uac-did.xml.in` | Modelo do cenário SIPp: INVITE -> 200 -> ACK -> RTP opcional -> BYE |
+| `scenarios/uas-answer.xml.in` | Modelo do atendedor (UAS) dos DIDs DIRECT-IP: INVITE -> 180/200 -> ACK -> RTP opcional -> BYE |
 | `loadtest.conf.example` | Configuração comentada (copiar para `loadtest.conf`) |
 | `dids.txt.example` | Formato do arquivo de DIDs e consulta para exportá-los do banco |
-| `lab/` | Laboratório STFC em Docker para validar o script sem tocar na produção: banco (Percona XtraDB Cluster 8.4.10 + keepalived), web (nginx 1.22.1 + PHP-FPM 7.3.33), OpenSIPS 3.6 e FreeSWITCH 1.11.3 reais com os scripts do Flux, Zabbix 7.4, acesso pelo macOS e registro de SIP devices (veja `lab/README.md`) |
+| `lab/` | Laboratório STFC em Docker para validar o script sem tocar na produção: banco (Percona XtraDB Cluster 8.4.10 + keepalived), web (nginx 1.22.1 + PHP-FPM 7.3.33), OpenSIPS 3.6 e FreeSWITCH 1.11.3 reais com os scripts do Flux, Zabbix 7.2.3, acesso pelo macOS e registro de SIP devices (veja `lab/README.md`) |
+| `lab/vm/` | O mesmo laboratório em 6 VMs Debian 12, sem Docker: o `vmlab.sh` roda no servidor de testes e configura as outras 5 VMs por SSH, com systemd (veja `lab/vm/README.md`) |
 
 ## 3. Requisitos
 

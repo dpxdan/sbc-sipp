@@ -21,3 +21,20 @@ CMakeUserPresets.json
 # Python
 __pycache__/
 *.pyc
+sftp-config.json
+.phpintel
+*/misc/*
+.DS_Store
+*/config/development
+*/logs/log-*.php
+!*/logs/index.html
+*/cache/*
+!system/cache/*
+!*/cache/index.html
+!*/cache/.htaccess
+
+application/logs/*
+!application/logs/index.html
+!application/logs/.htaccess
+.vscode/
+.claude/

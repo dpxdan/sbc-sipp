@@ -7,6 +7,9 @@ dialplan, schema do banco), Percona XtraDB Cluster 8.4.10, nginx + PHP-FPM 7.3 e
 teste. Um Zabbix 7.2.3 (mesma versão da produção) recebe as amostras dos testes. Pelo macOS dá para acessar a
 interface web, o Zabbix e o SSH dos servidores, e registrar SIP devices (softphones).
 
+Sem Docker: o mesmo laboratório em VMs Debian 12, configuradas a partir do servidor de
+testes, está em [`vm/README.md`](vm/README.md).
+
 ## Topologia
 
 | Container (hostname) | Rede interna 172.30.4.0/24 | Rede "pública" 172.30.177.0/24 | O que roda |
