@@ -267,7 +267,7 @@ run_role() {
 cmd_init() {
     if [[ ! -f ${CONF_FILE} ]]; then
         install -m 0600 "${VMLAB_DIR}/vmlab.conf.example" "${CONF_FILE}"
-        log "criado ${CONF_FILE}: ajuste IPs, VIP, NET_PATTERN e FLUX_GIT_URL e rode '$0 init' de novo"
+        log "criado ${CONF_FILE}: ajuste IPs, VIP, NET_PATTERN e FLUX_GIT_URL e rode '$0 init -c ${CONF_FILE}' de novo"
         return 0
     fi
     load_config
@@ -278,7 +278,7 @@ cmd_init() {
         ssh-keygen -q -t ed25519 -N '' -C "vmlab@$(uname -n)" -f "${SSH_KEY}"
         log "chave do orquestrador: ${SSH_KEY}"
     fi
-    log "senhas em ${SECRETS} (0600). Proximo passo: $0 bootstrap"
+    log "senhas em ${SECRETS} (0600). Proximo passo: $0 bootstrap -c ${CONF_FILE}"
 }
 
 cmd_bootstrap() {

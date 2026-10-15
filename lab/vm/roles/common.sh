@@ -22,8 +22,13 @@ apt_install openssh-server sudo iproute2 procps curl ca-certificates gnupg lsb-r
 systemctl enable --now systemd-timesyncd >/dev/null 2>&1 || warn "systemd-timesyncd nao ativado (use NTP/chrony)"
 
 if [[ ${LAB_SET_HOSTNAME:-1} == 1 && $(hostname) != "${LAB_HOSTNAME}" ]]; then
-    hostnamectl set-hostname "${LAB_HOSTNAME}"
-    log "hostname: ${LAB_HOSTNAME}"
+    # sem systemd-hostnamed (instalacao minima, container): /etc/hostname + hostname
+    if hostnamectl set-hostname "${LAB_HOSTNAME}" 2>/dev/null \
+            || { printf '%s\n' "${LAB_HOSTNAME}" > /etc/hostname && hostname "${LAB_HOSTNAME}"; }; then
+        log "hostname: ${LAB_HOSTNAME}"
+    else
+        warn "nao foi possivel trocar o hostname para ${LAB_HOSTNAME} (SET_HOSTNAME=0 desliga)"
+    fi
 fi
 
 # Bloco gerenciado do /etc/hosts com os nomes do laboratorio
@@ -35,7 +40,8 @@ hosts_block() {
 tmp=$(mktemp)
 awk '/^# flux-lab inicio/ { skip = 1 } !skip { print } /^# flux-lab fim/ { skip = 0 }' /etc/hosts > "${tmp}"
 hosts_block >> "${tmp}"
-install -m 0644 "${tmp}" /etc/hosts
+# reescreve o conteudo sem trocar o arquivo (funciona tambem com /etc/hosts montado)
+cat "${tmp}" > /etc/hosts
 rm -f "${tmp}"
 
 if ! id loadtest >/dev/null 2>&1; then

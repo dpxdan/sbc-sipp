@@ -175,9 +175,30 @@ EOF
 
     mkdir -p /var/log/freeswitch/json_cdr /var/lib/freeswitch/storage /var/lib/freeswitch/recordings
     if [[ ${LAB_INIT} == systemd ]]; then
-        # unidade do pacote (freeswitch.service): como root, igual ao container, porque o
-        # PHP/Lua do Flux e o ODBC leem arquivos de root:www-data
-        printf 'USER=root\nGROUP=root\nDAEMON_OPTS="-nonat"\n' > /etc/default/freeswitch
+        # Os pacotes da SignalWire nao trazem unidade systemd. Mesma linha de comando do
+        # container, como root: o Lua/ODBC do Flux le arquivos root:www-data
+        cat > /etc/systemd/system/freeswitch.service <<EOF
+[Unit]
+Description=FreeSWITCH (laboratorio Flux, gerado pelo start.sh)
+Wants=network-online.target
+After=network-online.target local-fs.target
+
+[Service]
+Type=forking
+RuntimeDirectory=freeswitch
+PIDFile=/run/freeswitch/freeswitch.pid
+ExecStart=/usr/bin/freeswitch -ncwait -nonat -conf ${FS_CONF} -log /var/log/freeswitch -db /var/lib/freeswitch/db -run /run/freeswitch
+ExecStop=/usr/bin/freeswitch -stop -run /run/freeswitch
+TimeoutStartSec=120
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=999999
+LimitCORE=infinity
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        systemctl daemon-reload
         svc freeswitch
     else
         freeswitch -nc -nonat -conf "${FS_CONF}" -log /var/log/freeswitch -db /var/lib/freeswitch/db >/dev/null 2>&1
@@ -276,6 +297,7 @@ Type=simple
 PIDFile=
 ExecStart=
 ExecStart=/usr/sbin/opensips -F -f /etc/opensips/opensips.cfg -m $S_MEMORY -M $P_MEMORY
+ExecStop=
 EOF
         systemctl daemon-reload
         svc opensips
@@ -285,7 +307,7 @@ EOF
     local i
     for ((i = 0; i < 30; i++)); do
         if opensips-cli -x mi version >/dev/null 2>&1; then
-            log "OpenSIPS $(opensips -V | awk 'NR == 1 { print $3 }') ativo em ${LAB_PUB_IP}:5060 e ${LAB_INT_IP}:5060$( ((LAB_MAC_SOCKETS)) && printf ' e :5062 (devices do macOS)')"
+            log "OpenSIPS $(opensips -V | awk 'NR == 1 { print $3 }') ativo em ${LAB_PUB_IP}:5060$([[ ${LAB_INT_IP} != "${LAB_PUB_IP}" ]] && printf ' e %s:5060' "${LAB_INT_IP}")$( ((LAB_MAC_SOCKETS)) && printf ' e :5062 (devices do macOS)')"
             return 0
         fi
         sleep 1
