@@ -11,6 +11,7 @@ servidor (ou copiado) e o comando é executado lá.
 | `mysql` | `banco-master-sbc-stfc`, `banco-slave-stfc` | Percona XtraDB Cluster 8.4.10 + keepalived (VIP) |
 | `web` | `sbc-stfc-interfaceweb` | nginx 1.22.1 + PHP-FPM 7.3 |
 | `gen` | servidor de testes | SIPp, wrk, sysbench, limites de rede e o `loadtest.conf` |
+| `zabbix-agent` | servidor de testes (só `prepare`/`check`) | zabbix-agentd e o wrapper do disparo de perfis pelo Zabbix (README principal, seção 19.6) |
 
 Vários papéis no mesmo servidor: `flux-host.sh lab freeswitch opensips`.
 
@@ -87,6 +88,7 @@ Não usa `host.conf`. Em cada servidor, só os papéis que ele tem:
 | `mysql` | `/etc/mysql/flux-loadtest.cnf` (0600, dono `loadtest`) com a credencial do `flux_monitor`; com `--create-db-user`, `CREATE USER IF NOT EXISTS flux_monitor@localhost` (PROCESS, REPLICATION CLIENT) | login do `loadtest` no `check` |
 | `web` | sem `--apply-status`, só informa. Com `--apply-status`: `server` próprio em `127.0.0.1:80` (`/etc/nginx/conf.d/flux-loadtest-status.conf`) com `/nginx_status` e `/fpm-status`, e `pm.status_path` num arquivo à parte do pool (`zz-flux-loadtest.conf`) | `nginx -t`, `php-fpm7.3 -t`; reload (graceful) |
 | `gen` | papel `gen` do laboratório (pacotes, sysctl, limites) no servidor de testes | — |
+| `zabbix-agent` | servidor de testes: `zabbix-agent` 7.2 (se faltar, com `--zabbix-server`), `/usr/local/sbin/flux-loadtest-zbx`, sudoers do usuário `zabbix`, include com `AllowKey` por perfil, `Server=` passivo; restart só do agent | `visudo -cf`, `zabbix_agentd -T` |
 
 Fluxo de cada execução:
 

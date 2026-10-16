@@ -106,6 +106,8 @@ Consequências para o teste:
 | `loadtest.conf.example` | Configuração comentada (copiar para `loadtest.conf`) |
 | `dids.txt.example` | Formato do arquivo de DIDs e consulta para exportá-los do banco |
 | `lab/` | Laboratório STFC em Docker para validar o script sem tocar na produção: banco (Percona XtraDB Cluster 8.4.10 + keepalived), web (nginx 1.22.1 + PHP-FPM 7.3.33), OpenSIPS 3.6 e FreeSWITCH 1.11.3 reais com os scripts do Flux, Zabbix 7.2.3, acesso pelo macOS e registro de SIP devices (veja `lab/README.md`) |
+| `bin/flux-loadtest-zbx` | Disparo de perfis pelo Zabbix: chamado pelo zabbix-agentd do servidor de testes (seção 19.6) |
+| `profiles/*.conf.example` | Perfis de teste para o disparo pelo Zabbix |
 | `lab/vm/` | O mesmo laboratório em 6 VMs Debian 12, sem Docker: o `vmlab.sh` roda no servidor de testes e configura as outras 5 VMs por SSH, com systemd (veja `lab/vm/README.md`) |
 | `install/` | Instalador local por papel (`freeswitch`, `opensips`, `mysql`, `web`, `gen`): `flux-host.sh lab` instala o laboratório no próprio servidor; `flux-host.sh prepare` só prepara servidores existentes (STFC) para o teste (veja `install/README.md`) |
 
@@ -1405,3 +1407,78 @@ reimporte (`zabbix setup --import-template`):
 ```bash
 python3 zabbix/gen_templates.py > zabbix/flux-loadtest-templates.yaml
 ```
+
+### 19.6 Disparo pelo Zabbix
+
+Perfis de teste pré-definidos podem ser iniciados e parados pela interface do Zabbix,
+sem terminal. O fluxo:
+
+```
+Zabbix (menu Flux Loadtest do host <prefixo>gen)
+  -> script global, executado pelo zabbix-agentd do servidor de testes (system.run)
+     -> sudo -n /usr/local/sbin/flux-loadtest-zbx start <perfil>
+        -> systemd-run (unidade flux-loadtest-zbx) -> flux-loadtest.sh run --confirm-prod -y ...
+```
+
+| Peça | Onde | Função |
+|---|---|---|
+| `profiles/*.conf.example` | `/etc/flux-loadtest/profiles.d/<perfil>.conf` | Parâmetros do `run` (`TESTS`, `CPS`, `WINDOW`, `HOLD`, `MEDIA`...), lidos como dado; `ZABBIX_ENABLED=1` publica o perfil |
+| `bin/flux-loadtest-zbx` | `/usr/local/sbin` | Valida o perfil, aplica os tetos, dispara a unidade systemd e grava o estado (`/var/lib/flux-loadtest/zbx-state.json`) |
+| Include do agent | `/etc/zabbix/zabbix_agentd.d/flux-loadtest.conf` | Gerado por `flux-loadtest-zbx agent-conf`: `UserParameter` de descoberta e estado, `AllowKey` exato por perfil e `DenyKey=system.run[*]` |
+| Template `Flux Loadtest - Disparo` | host `<prefixo>gen` (interface agent) | Estado (30 s), descoberta dos perfis (10 min) e, por perfil, código, fim, resultado e diretório da última execução |
+| Scripts globais | menu **Flux Loadtest** | Iniciar perfil (lista dos perfis, com confirmação), Plano (dry-run), Parar teste (com confirmação), Estado |
+
+Gatilhos do template: teste em execução (informação), última execução interrompida
+(código 6, guard ou "Parar teste"), última execução com falha (outros códigos) e agent sem
+estado por `{$FLT.TRIG.NODATA}`.
+
+**Segurança:**
+
+- O agent executa `system.run` com `sh -c`. Por isso o include libera **só os comandos
+  exatos** de cada perfil habilitado (sem `*`) e nega o resto. Validado com `zabbix_get`:
+  `system.run[id]` e `...start piloto; id` são recusados.
+- O usuário `zabbix` só pode rodar o wrapper pelo sudo. O wrapper revalida o nome do
+  perfil (`[a-z0-9-]`), as chaves e os valores, e recusa CPS acima de `ZBX_MAX_CPS` e janela
+  acima de `ZBX_MAX_WINDOW` (`/etc/flux-loadtest/zabbix-runner.conf`; padrões 50 CPS e 3600 s).
+- Uma execução por vez (trava + unidade systemd única). "Parar teste" manda SIGINT só ao
+  processo principal: parada suave, cooldown e relatório, como o Ctrl+C.
+- Os scripts exigem permissão de escrita no host gen e podem ficar restritos a um grupo de
+  usuários (`ZABBIX_SCRIPT_USRGRP`). O "Iniciar perfil" pede confirmação.
+- Cada perfil roda com `--confirm-prod -y`. Revise os perfis como revisaria o comando: quem
+  executa o script dispara a carga nos servidores reais.
+- Com `TESTS` contendo `sip`, o `start` exige `FS_CLI_PASSWORD_FILE` no `loadtest.conf`
+  (sem terminal, não há `--fs-password`).
+
+**Preparação (servidor de testes, como root):**
+
+```bash
+install -d -m 0755 /etc/flux-loadtest/profiles.d && cp /opt/flux-loadtest/profiles/piloto.conf.example /etc/flux-loadtest/profiles.d/piloto.conf
+```
+
+```bash
+/opt/flux-loadtest/install/flux-host.sh prepare zabbix-agent --zabbix-server IP_DO_ZABBIX_SERVER --dry-run
+```
+
+Sem `--dry-run`, o `prepare` instala o `zabbix-agent` 7.2 (se faltar), o wrapper, o sudoers e
+o include, ajusta o `Server=` (modo passivo) e reinicia o agent. Repita depois de cada
+mudança nos perfis (o `AllowKey` é por perfil). Confira com
+`flux-host.sh check zabbix-agent`.
+
+No `loadtest.conf`, `ZABBIX_GEN_AGENT` com o IP do agent (e, se quiser,
+`ZABBIX_SCRIPT_USRGRP`). Depois:
+
+```bash
+./flux-loadtest.sh zabbix setup --import-template --scripts
+```
+
+O host `<prefixo>gen` ganha a interface agent (10050) e o template de disparo, e os scripts
+são criados ou atualizados com a lista dos perfis. Rode de novo quando os perfis mudarem.
+
+**Uso:** Monitoramento > Hosts, menu do host `<prefixo>gen` > Flux Loadtest > Iniciar perfil.
+A execução aparece no host `<prefixo>run` (seção 19.2) e no relatório de sempre; o estado e o
+código final, nos itens do template de disparo. Diagnóstico: `journalctl -u flux-loadtest-zbx`.
+
+Validado com Zabbix 7.2.3 e zabbix-agent 7.2 em Debian 12 (com um `flux-loadtest.sh` falso):
+importação do template, criação idempotente dos scripts, lista de perfis, recusa de valor fora
+da lista, início, recusa de segundo início, parada suave com código 6, LLD e gatilhos. No 7.2,
+script executado no agent tem timeout fixo de 30 s (o `plan` corta em 25 s).

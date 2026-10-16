@@ -8,6 +8,8 @@
 #   mysql        Percona XtraDB Cluster 8.4.10 + keepalived (banco-master, banco-slave)
 #   web          nginx + PHP-FPM 7.3 (interfaceweb)
 #   gen          servidor de testes: SIPp, wrk, sysbench e o loadtest.conf
+#   zabbix-agent servidor de testes (prepare): zabbix-agentd e flux-loadtest-zbx para iniciar
+#                perfis pela interface do Zabbix
 #
 # Modos:
 #   lab      instalacao completa de laboratorio, com os papeis de lab/vm/roles (os mesmos
@@ -40,7 +42,8 @@ usage() {
     cat <<EOF
 Uso: $0 <acao> [papel...] [opcoes]
 
-Papeis: freeswitch, opensips, mysql, web, gen (varios no mesmo servidor: "freeswitch opensips")
+Papeis: freeswitch, opensips, mysql, web, gen, zabbix-agent (so prepare/check, no servidor de
+testes). Varios no mesmo servidor: "freeswitch opensips"
 
 Laboratorio (host.conf + secrets.env iguais em todos os servidores):
   init               no servidor de testes: cria o host.conf (se faltar) e, depois de
@@ -69,6 +72,7 @@ Opcoes:
   --create-db-user        prepare mysql: cria o flux_monitor (uma vez, em um no do cluster)
   --apply-status          prepare web: cria o status do nginx e do PHP-FPM em 127.0.0.1 e
                           recarrega os servicos (reload, sem derrubar conexoes)
+  --zabbix-server IP      prepare zabbix-agent: Server= do agent (instala o agent se faltar)
 EOF
 }
 
@@ -80,6 +84,7 @@ ASSUME_YES=0
 MONITOR_PASS_FILE=""
 CREATE_DB_USER=0
 APPLY_STATUS=0
+ZBX_SERVER=""
 ROLES=()
 
 # shellcheck source=lab/lib/inventory.sh
@@ -101,8 +106,8 @@ valid_roles() {
     ((${#ROLES[@]} > 0)) || die "informe ao menos um papel (freeswitch, opensips, mysql, web, gen)"
     for r in "${ROLES[@]}"; do
         case "${r}" in
-            freeswitch|opensips|mysql|web|gen) ;;
-            *) die "papel invalido: ${r} (freeswitch, opensips, mysql, web, gen)" ;;
+            freeswitch|opensips|mysql|web|gen|zabbix-agent) ;;
+            *) die "papel invalido: ${r} (freeswitch, opensips, mysql, web, gen, zabbix-agent)" ;;
         esac
     done
 }
@@ -170,6 +175,7 @@ check_role_host() {
             mysql)               [[ ${SELF} == db1 || ${SELF} == db2 ]] && ok=1 || ok=0 ;;
             web)                 [[ ${SELF} == web ]] && ok=1 || ok=0 ;;
             gen)                 [[ ${SELF} == gen ]] && ok=1 || ok=0 ;;
+            zabbix-agent)        die "papel zabbix-agent: use '$0 prepare zabbix-agent --zabbix-server IP' no servidor de testes" ;;
         esac
         ((ok)) || die "papel ${r} nao corresponde a ${SELF} no inventario (use --as se a deteccao errou)"
     done
@@ -364,6 +370,14 @@ cmd_check() {
                 chk "nginx_status em 127.0.0.1 (opcional)" curl -fsS -m 3 http://127.0.0.1/nginx_status
                 chk "fpm-status em 127.0.0.1 (opcional)" curl -fsS -m 3 'http://127.0.0.1/fpm-status?json'
                 ;;
+            zabbix-agent)
+                chk "servico zabbix-agent ativo" systemctl is-active --quiet zabbix-agent
+                chk "wrapper /usr/local/sbin/flux-loadtest-zbx" test -x /usr/local/sbin/flux-loadtest-zbx
+                chk "sudoers do usuario zabbix" visudo -cf /etc/sudoers.d/flux-loadtest-zbx
+                chk "estado pelo usuario zabbix (sudo -n)" runuser -u zabbix -- sudo -n /usr/local/sbin/flux-loadtest-zbx state
+                v=$(zabbix_agentd -t flt.profiles.discovery 2>/dev/null | sed -n 's/.*\[t|\(.*\)\]$/\1/p') || true
+                [[ -n ${v} ]] && info "descoberta: ${v}"
+                ;;
             gen)
                 chk "sipp" command -v sipp
                 chk "wrk" command -v wrk
@@ -388,6 +402,7 @@ main() {
             --monitor-pass-file) MONITOR_PASS_FILE=${2:?--monitor-pass-file exige um arquivo}; shift 2 ;;
             --create-db-user)    CREATE_DB_USER=1; shift ;;
             --apply-status)      APPLY_STATUS=1; shift ;;
+            --zabbix-server)     ZBX_SERVER=${2:?--zabbix-server exige um IP}; shift 2 ;;
             -h|--help)           usage; return 0 ;;
             -*)                  usage >&2; die "opcao invalida: $1" ;;
             *)                   ROLES+=("$1"); shift ;;
@@ -404,7 +419,13 @@ main() {
         keys)         gen_only; cmd_keys ;;
         smoke)        gen_only; cmd_smoke ;;
         zabbix)       gen_only; cmd_zabbix ;;
-        prepare)      valid_roles; require_debian12; cmd_prepare ;;
+        prepare)
+            valid_roles
+            require_debian12
+            [[ -z ${ZBX_SERVER} || ${ZBX_SERVER} =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}(,[0-9]{1,3}(\.[0-9]{1,3}){3})*$ ]] \
+                || die "--zabbix-server: IPv4 (ou lista separada por virgula)"
+            cmd_prepare
+            ;;
         check)        cmd_check || exit 1 ;;
         *)            usage >&2; die "acao invalida: ${action}" ;;
     esac

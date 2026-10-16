@@ -3590,6 +3590,211 @@ zabbix_export:
         - macro: '{$FLT.NODATA}'
           value: '5m'
           description: 'Sem dados por este tempo = fim do teste'
+    - uuid: 1788cf8bf60347bab272f73d8cd4103f
+      template: 'Flux Loadtest - Disparo'
+      name: 'Flux Loadtest - Disparo'
+      description: 'Disparo de perfis do flux-loadtest pelo Zabbix (host <prefixo>gen com interface agent). Itens do zabbix-agentd (bin/flux-loadtest-zbx); iniciar e parar pelos scripts do menu Flux Loadtest.'
+      groups:
+        - name: 'Templates/Flux Loadtest'
+      items:
+        - uuid: 44df162671a4463fa9684e9ccddc1cf7
+          name: 'Estado do disparo (JSON)'
+          key: 'flt.runner.state'
+          delay: 30s
+          history: 1d
+          trends: '0'
+          value_type: TEXT
+          description: 'sudo -n flux-loadtest-zbx state: execucao em andamento e ultimo resultado de cada perfil.'
+          tags:
+            - tag: 'component'
+              value: 'raw'
+          triggers:
+            - uuid: 6823bd78a40245b5a0128e518f07fe8f
+              expression: 'nodata(/Flux Loadtest - Disparo/flt.runner.state,{$FLT.TRIG.NODATA})=1'
+              name: 'Disparo: zabbix-agentd sem estado do flux-loadtest-zbx'
+              priority: WARNING
+              description: 'Confira o include do agent (flux-host.sh prepare zabbix-agent), o sudoers e o wrapper.'
+              manual_close: 'YES'
+              tags:
+                - tag: 'scope'
+                  value: 'disparo'
+        - uuid: 44a62a1abb004e3883e1d62dfdb41c1a
+          name: 'Teste disparado pelo Zabbix em execucao'
+          type: DEPENDENT
+          key: 'flt.runner.running'
+          delay: '0'
+          history: 90d
+          value_type: UNSIGNED
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.running'
+              error_handler: DISCARD_VALUE
+          master_item:
+            key: 'flt.runner.state'
+          tags:
+            - tag: 'component'
+              value: 'disparo'
+          triggers:
+            - uuid: 44ba8bc64b9444bd9c962050a0ef9c9a
+              expression: 'last(/Flux Loadtest - Disparo/flt.runner.running)=1'
+              name: 'Teste de carga disparado pelo Zabbix em execucao'
+              priority: INFO
+              description: 'Informativo: aparece enquanto a unidade flux-loadtest-zbx estiver ativa. Parar: script "Parar teste".'
+              manual_close: 'YES'
+              tags:
+                - tag: 'scope'
+                  value: 'disparo'
+        - uuid: c65c356a44a84ec6a9474c5ed5d7e520
+          name: 'Perfil em execucao'
+          type: DEPENDENT
+          key: 'flt.runner.profile'
+          delay: '0'
+          history: 90d
+          trends: '0'
+          value_type: CHAR
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.profile'
+              error_handler: DISCARD_VALUE
+          master_item:
+            key: 'flt.runner.state'
+          tags:
+            - tag: 'component'
+              value: 'disparo'
+        - uuid: a4becf268e6d46558f781fe9d6b9800a
+          name: 'Inicio da execucao em andamento'
+          type: DEPENDENT
+          key: 'flt.runner.started'
+          delay: '0'
+          history: 90d
+          value_type: UNSIGNED
+          units: 'unixtime'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.started'
+              error_handler: DISCARD_VALUE
+          master_item:
+            key: 'flt.runner.state'
+          tags:
+            - tag: 'component'
+              value: 'disparo'
+      macros:
+        - macro: '{$FLT.TRIG.NODATA}'
+          value: '5m'
+          description: 'Sem estado do agent por este tempo = disparo indisponivel'
+      discovery_rules:
+        - uuid: 0566c7b25d5e49efa1164750bb8dd8bb
+          name: 'Perfis do flux-loadtest'
+          key: 'flt.profiles.discovery'
+          delay: 10m
+          lifetime: 7d
+          description: 'Perfis com ZABBIX_ENABLED=1 em /etc/flux-loadtest/profiles.d (flux-loadtest-zbx discovery).'
+          item_prototypes:
+            - uuid: 3761f5d51d2746a7b8ae8359f972e296
+              name: 'Perfil {#PROFILE}: codigo da ultima execucao'
+              type: DEPENDENT
+              key: 'flt.profile.last_rc[{#PROFILE}]'
+              delay: '0'
+              history: 90d
+              value_type: FLOAT
+              description: '{#DESC} (testes: {#TESTS})'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.last[''{#PROFILE}''].rc'
+                  error_handler: DISCARD_VALUE
+              master_item:
+                key: 'flt.runner.state'
+              tags:
+                - tag: 'component'
+                  value: 'perfil'
+                - tag: 'profile'
+                  value: '{#PROFILE}'
+              trigger_prototypes:
+                - uuid: 1210269cb5f1405c871fe6a4c31029ea
+                  expression: 'last(/Flux Loadtest - Disparo/flt.profile.last_rc[{#PROFILE}])=6'
+                  name: 'Perfil {#PROFILE}: ultima execucao interrompida (guard ou operador)'
+                  priority: WARNING
+                  description: 'Codigo 6: limite de seguranca atingido ou parada pelo script "Parar teste". Veja o relatorio no diretorio do resultado.'
+                  manual_close: 'YES'
+                  tags:
+                    - tag: 'scope'
+                      value: 'disparo'
+                - uuid: 74c644c31dba4d7383917f0f7364c1b4
+                  expression: 'last(/Flux Loadtest - Disparo/flt.profile.last_rc[{#PROFILE}])<>0 and last(/Flux Loadtest - Disparo/flt.profile.last_rc[{#PROFILE}])<>6'
+                  name: 'Perfil {#PROFILE}: ultima execucao falhou (codigo {ITEM.LASTVALUE1})'
+                  priority: HIGH
+                  description: 'Codigos: 2 uso, 3 configuracao, 4 dependencia, 5 falha remota, -1 encerrado por sinal. Veja journalctl -u flux-loadtest-zbx.'
+                  manual_close: 'YES'
+                  tags:
+                    - tag: 'scope'
+                      value: 'disparo'
+            - uuid: faac5c2b2d51479181b70ba597e1bf4a
+              name: 'Perfil {#PROFILE}: fim da ultima execucao'
+              type: DEPENDENT
+              key: 'flt.profile.last_ts[{#PROFILE}]'
+              delay: '0'
+              history: 90d
+              value_type: UNSIGNED
+              units: 'unixtime'
+              description: '{#DESC} (testes: {#TESTS})'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.last[''{#PROFILE}''].ts'
+                  error_handler: DISCARD_VALUE
+              master_item:
+                key: 'flt.runner.state'
+              tags:
+                - tag: 'component'
+                  value: 'perfil'
+                - tag: 'profile'
+                  value: '{#PROFILE}'
+            - uuid: 21ffd01030c448d59afe783b905c2e32
+              name: 'Perfil {#PROFILE}: resultado do systemd'
+              type: DEPENDENT
+              key: 'flt.profile.last_result[{#PROFILE}]'
+              delay: '0'
+              history: 90d
+              trends: '0'
+              value_type: CHAR
+              description: '{#DESC} (testes: {#TESTS})'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.last[''{#PROFILE}''].result'
+                  error_handler: DISCARD_VALUE
+              master_item:
+                key: 'flt.runner.state'
+              tags:
+                - tag: 'component'
+                  value: 'perfil'
+                - tag: 'profile'
+                  value: '{#PROFILE}'
+            - uuid: 079481e2fc6c40e5b07c081a85c3650c
+              name: 'Perfil {#PROFILE}: diretorio do resultado'
+              type: DEPENDENT
+              key: 'flt.profile.last_dir[{#PROFILE}]'
+              delay: '0'
+              history: 90d
+              trends: '0'
+              value_type: CHAR
+              description: '{#DESC} (testes: {#TESTS})'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.last[''{#PROFILE}''].run_dir'
+                  error_handler: DISCARD_VALUE
+              master_item:
+                key: 'flt.runner.state'
+              tags:
+                - tag: 'component'
+                  value: 'perfil'
+                - tag: 'profile'
+                  value: '{#PROFILE}'
   graphs:
     - uuid: 7fddee778e1a44afafe4ad4e8412a5c1
       name: 'Flux LT: CPU'

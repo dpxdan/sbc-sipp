@@ -19,12 +19,19 @@ readonly PREP_MYCNF=/etc/mysql/flux-loadtest.cnf
 readonly PREP_NGINX_CONF=/etc/nginx/conf.d/flux-loadtest-status.conf
 readonly PREP_FPM_POOL_DIR=/etc/php/7.3/fpm/pool.d
 readonly PREP_FPM_CONF=${PREP_FPM_POOL_DIR}/zz-flux-loadtest.conf
+readonly PREP_ZBX_BIN=/usr/local/sbin/flux-loadtest-zbx
+readonly PREP_ZBX_SUDOERS=/etc/sudoers.d/flux-loadtest-zbx
+readonly PREP_ZBX_AGENT_CONF=/etc/zabbix/zabbix_agentd.conf
+readonly PREP_ZBX_INCLUDE=/etc/zabbix/zabbix_agentd.d/flux-loadtest.conf
+readonly PREP_ZBX_PROFILES=/etc/flux-loadtest/profiles.d
+readonly PREP_ZBX_RELEASE=https://repo.zabbix.com/zabbix/7.2/release/debian/pool/main/z/zabbix-release/zabbix-release_latest_7.2+debian12_all.deb
 
 PREP_APPLY=0
 PREP_CHANGES=0
 PREP_CHANGED=0
 PREP_BACKUP_DIR=""
 PREP_RELOAD=()
+PREP_RESTART_AGENT=0
 
 prep_backup() {
     local f=$1
@@ -221,10 +228,65 @@ prep_gen() {
         bash "${ROLES_DIR}/gen.sh"
 }
 
+# Repositorio oficial do Zabbix 7.2 (versao de producao) e o zabbix-agent (agentd)
+prep_install_agent() {
+    local tmp
+    tmp=$(mktemp -d)
+    curl -fsSLo "${tmp}/zabbix-release.deb" "${PREP_ZBX_RELEASE}" || { rm -rf "${tmp}"; return 1; }
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "${tmp}/zabbix-release.deb"
+    rm -rf "${tmp}"
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends zabbix-agent sudo python3
+}
+
+# Servidor de testes: zabbix-agentd + flux-loadtest-zbx para o disparo pelo Zabbix (README 19.6)
+prep_zabbix_agent() {
+    local src="${REPO_DIR}/bin/flux-loadtest-zbx" conf
+    [[ -r ${src} ]] || die "wrapper ausente no repositorio: ${src}"
+    if dpkg -s zabbix-agent >/dev/null 2>&1; then
+        log "ok: zabbix-agent instalado ($(dpkg-query -W -f '${Version}' zabbix-agent))"
+    else
+        [[ -n ${ZBX_SERVER} ]] || die "zabbix-agent ausente: informe --zabbix-server IP para instalar e configurar"
+        prep_cmd "instalar o zabbix-agent 7.2 (repo.zabbix.com)" prep_install_agent
+    fi
+    prep_file "${PREP_ZBX_BIN}" 0755 root:root 0 < "${src}"
+    if [[ ! -d ${PREP_ZBX_PROFILES} ]]; then
+        prep_cmd "criar ${PREP_ZBX_PROFILES} (perfis: profiles/*.conf.example)" install -d -m 0755 "${PREP_ZBX_PROFILES}"
+    fi
+    prep_file "${PREP_ZBX_SUDOERS}" 0440 root:root 0 visudo -cf "${PREP_ZBX_SUDOERS}" \
+        < <(printf '# gerado pelo flux-host.sh prepare zabbix-agent: disparo do flux-loadtest pelo Zabbix\n# O wrapper valida perfil e argumentos; nenhum outro comando para o usuario zabbix.\nzabbix ALL=(root) NOPASSWD: %s\n' "${PREP_ZBX_BIN}")
+    # sem o agent instalado (plano), o restante depende dele: para aqui
+    if ((PREP_APPLY == 0)) && ! dpkg -s zabbix-agent >/dev/null 2>&1; then
+        log "plano: depois da instalacao, ${PREP_ZBX_INCLUDE} e Server=${ZBX_SERVER} em ${PREP_ZBX_AGENT_CONF}"
+        PREP_CHANGES=$((PREP_CHANGES + 2))
+        return 0
+    fi
+    if [[ -n ${ZBX_SERVER} ]]; then
+        # so o modo passivo: Server (quem consulta e executa) e sem ServerActive
+        prep_file "${PREP_ZBX_AGENT_CONF}" 0644 root:root 0 zabbix_agentd -T -c "${PREP_ZBX_AGENT_CONF}" \
+            < <(sed -E -e "s/^Server=.*/Server=${ZBX_SERVER}/" \
+                       -e 's/^ServerActive=(.*)/# ServerActive=\1   # desativado pelo flux-host.sh (so passivo)/' \
+                       "${PREP_ZBX_AGENT_CONF}")
+        if ((PREP_CHANGED)); then PREP_RESTART_AGENT=1; fi
+    fi
+    # AllowKey exato por perfil: regenerar quando os perfis mudam
+    conf=$(FLT_ZBX_RUNNER_CONF=/etc/flux-loadtest/zabbix-runner.conf bash "${src}" agent-conf) \
+        || die "flux-loadtest-zbx agent-conf falhou (perfis invalidos?)"
+    prep_file "${PREP_ZBX_INCLUDE}" 0644 root:root 0 zabbix_agentd -T -c "${PREP_ZBX_AGENT_CONF}" <<< "${conf}"
+    if ((PREP_CHANGED)); then PREP_RESTART_AGENT=1; fi
+    if ! grep -q '^ZABBIX_ENABLED=1' "${PREP_ZBX_PROFILES}"/*.conf 2>/dev/null; then
+        warn "nenhum perfil com ZABBIX_ENABLED=1 em ${PREP_ZBX_PROFILES}: copie de ${REPO_DIR}/profiles/ e repita"
+    fi
+    if ((PREP_RESTART_AGENT)); then
+        prep_cmd "restart do zabbix-agent (le o include novo; so no servidor de testes)" systemctl restart zabbix-agent
+    fi
+}
+
 prep_pass() {
     local r
     PREP_CHANGES=0
     PREP_RELOAD=()
+    PREP_RESTART_AGENT=0
     prep_common
     if has_req freeswitch || has_req opensips; then
         prep_sudoers
@@ -234,6 +296,7 @@ prep_pass() {
             mysql) prep_mysql ;;
             web)   prep_web ;;
             gen)   prep_gen ;;
+            zabbix-agent) prep_zabbix_agent ;;
         esac
     done
     ((${#PREP_RELOAD[@]} == 0)) || prep_reload

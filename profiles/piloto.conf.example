@@ -1,0 +1,16 @@
+# profiles/piloto.conf - perfil de teste disparado pelo Zabbix (bin/flux-loadtest-zbx)
+#
+# Copie para /etc/flux-loadtest/profiles.d/piloto.conf (o nome do arquivo e o nome do perfil:
+# [a-z0-9-], ate 32 caracteres). Formato CHAVE=valor, lido como dado (nunca executado).
+# Equivale a: flux-loadtest.sh run --confirm-prod -y -t sip -r 1 -H 10 -w 60 --media none
+#
+# ZABBIX_ENABLED=1 publica o perfil na descoberta (LLD) e no menu do Zabbix; com 0 ele existe
+# so para uso manual. O teto ZBX_MAX_CPS do zabbix-runner.conf vale para todos os perfis.
+
+DESC="Piloto: 1 CPS por 60 s, so sinalizacao"
+ZABBIX_ENABLED=1
+TESTS=sip
+CPS=1
+WINDOW=60
+HOLD=10
+MEDIA=none

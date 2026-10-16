@@ -47,7 +47,12 @@ ROLE_TEMPLATES = {
     "gen": ["Flux Loadtest - Sistema", "Flux Loadtest - Gerador"],
     "run": ["Flux Loadtest - Execucao"],
 }
+# Disparo pelo Zabbix: so no host gen com interface agent (itens passivos do zabbix-agentd)
+TRIGGER_TEMPLATE = "Flux Loadtest - Disparo"
 HOST_GROUP = "Flux Loadtest"
+ZBX_WRAPPER = "sudo -n /usr/local/sbin/flux-loadtest-zbx"
+SCRIPT_MENU = "Flux Loadtest"
+PROFILE_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
 TEMPLATE_GROUP = "Templates/Flux Loadtest"
 
 BATCH = 250          # valores por requisicao ao trapper
@@ -622,6 +627,89 @@ def import_template(api, path):
     log(f"template importado: {path}")
 
 
+def enabled_profiles(directory):
+    """Perfis com ZABBIX_ENABLED=1 (mesma regra do bin/flux-loadtest-zbx list), ordenados."""
+    names = []
+    try:
+        files = sorted(os.listdir(directory))
+    except OSError as e:
+        die(E_CONFIG, f"diretorio de perfis ilegivel: {e}")
+    for fn in files:
+        name = fn[:-5] if fn.endswith(".conf") else ""
+        if not PROFILE_RE.fullmatch(name):
+            continue
+        try:
+            with open(os.path.join(directory, fn), encoding="utf-8") as f:
+                on = any(l.strip().strip("\r") in ("ZABBIX_ENABLED=1", 'ZABBIX_ENABLED="1"') for l in f)
+        except OSError:
+            continue
+        if on:
+            names.append(name)
+    return names
+
+
+def ensure_agent_interface(api, hostid, addr):
+    """Interface agent (passiva, porta 10050) no host; atualiza o IP se mudou."""
+    cur = api.call("hostinterface.get", {"hostids": hostid, "filter": {"type": 1},
+                                         "output": ["interfaceid", "ip", "main"]})
+    if cur:
+        main = next((i for i in cur if i["main"] == "1"), cur[0])
+        if main["ip"] != addr:
+            api.call("hostinterface.update", {"interfaceid": main["interfaceid"], "ip": addr})
+            log(f"interface agent atualizada para {addr}")
+        return
+    api.call("hostinterface.create", {"hostid": hostid, "type": 1, "main": 1, "useip": 1,
+                                      "ip": addr, "dns": "", "port": "10050"})
+    log(f"interface agent criada: {addr}:10050")
+
+
+def setup_scripts(api, gid, a):
+    """Scripts globais do menu Flux Loadtest (manual host action, executados pelo agent do
+    host gen). Identificados por nome + menu: criados ou atualizados (idempotente)."""
+    profiles = enabled_profiles(a.profiles_dir)
+    usrgrp = "0"
+    if a.script_usrgrp:
+        g = api.call("usergroup.get", {"filter": {"name": [a.script_usrgrp]}, "output": ["usrgrpid"]})
+        if not g:
+            die(E_CONFIG, f"grupo de usuarios inexistente no Zabbix: {a.script_usrgrp}")
+        usrgrp = g[0]["usrgrpid"]
+    # execute_on agent: o Zabbix 7.2 fixa o timeout do script em 30s (o plan usa timeout 25)
+    base = {"type": 0, "execute_on": 0, "scope": 2, "menu_path": SCRIPT_MENU, "groupid": gid,
+            "usrgrpid": usrgrp, "host_access": 3}
+    pick = {"manualinput": 1, "manualinput_validator_type": 1,
+            "manualinput_validator": ",".join(profiles)}  # lista: o primeiro e o padrao
+    specs = [
+        dict(base, name="Iniciar perfil", command=f"{ZBX_WRAPPER} start {{MANUALINPUT}}",
+             manualinput_prompt="Perfil do flux-loadtest a iniciar", **pick,
+             confirmation="Iniciar o perfil {MANUALINPUT} em PRODUCAO? A carga atinge os servidores reais.",
+             description="Inicia o perfil numa unidade systemd no servidor de testes e retorna na hora."),
+        dict(base, name="Plano (dry-run)", command=f"{ZBX_WRAPPER} plan {{MANUALINPUT}}",
+             manualinput_prompt="Perfil para ver o plano", **pick,
+             description="Mostra o plano do run (--dry-run), sem executar nada."),
+        dict(base, name="Parar teste", command=f"{ZBX_WRAPPER} stop",
+             confirmation="Parar o teste em execucao? A parada e suave: cooldown e relatorio seguem.",
+             description="SIGINT no flux-loadtest.sh (como o Ctrl+C): codigo 6 no resultado."),
+        dict(base, name="Estado", command=f"{ZBX_WRAPPER} state",
+             description="Execucao em andamento e ultimo resultado de cada perfil (JSON)."),
+    ]
+    if not profiles:
+        log(f"AVISO: nenhum perfil com ZABBIX_ENABLED=1 em {a.profiles_dir}: scripts de perfil nao criados")
+        specs = [s for s in specs if "manualinput" not in s]
+    current = {(s["name"], s["menu_path"]): s["scriptid"] for s in
+               api.call("script.get", {"output": ["scriptid", "name", "menu_path"],
+                                       "filter": {"menu_path": [SCRIPT_MENU]}})}
+    for spec in specs:
+        sid = current.get((spec["name"], SCRIPT_MENU))
+        if sid:
+            api.call("script.update", dict(spec, scriptid=sid))
+            log(f"script atualizado: {SCRIPT_MENU}/{spec['name']}")
+        else:
+            api.call("script.create", spec)
+            log(f"script criado: {SCRIPT_MENU}/{spec['name']}")
+    if profiles:
+        log(f"perfis no menu: {', '.join(profiles)} (o agent so aceita os do include gerado por flux-loadtest-zbx agent-conf)")
+
+
 def cmd_setup(a):
     api = Api(a.api_url, read_token(a.token_file), a.insecure)
     log(f"API {a.api_url}: Zabbix {api.call('apiinfo.version', auth=False)}")
@@ -629,7 +717,7 @@ def cmd_setup(a):
         import_template(api, a.template)
     groups = api.call("hostgroup.get", {"filter": {"name": [HOST_GROUP]}, "output": ["groupid"]})
     gid = groups[0]["groupid"] if groups else api.call("hostgroup.create", {"name": HOST_GROUP})["groupids"][0]
-    names = sorted({t for ts in ROLE_TEMPLATES.values() for t in ts})
+    names = sorted({t for ts in ROLE_TEMPLATES.values() for t in ts} | ({TRIGGER_TEMPLATE} if a.gen_agent else set()))
     tpls = {t["host"]: t["templateid"] for t in
             api.call("template.get", {"filter": {"host": names}, "output": ["host"]})}
     missing = [n for n in names if n not in tpls]
@@ -645,8 +733,11 @@ def cmd_setup(a):
 
     for hid, role, addr, label in specs:
         host = a.prefix + hid
+        agent = role == "gen" and a.gen_agent
+        if agent:
+            addr = a.gen_agent
         visible = f"{host} ({label or role}{', ' + addr if addr else ''})"
-        links = [{"templateid": tpls[t]} for t in ROLE_TEMPLATES[role]]
+        links = [{"templateid": tpls[t]} for t in ROLE_TEMPLATES[role] + ([TRIGGER_TEMPLATE] if agent else [])]
         macros = []
         if role == "gen" and a.gen_cpu_max:
             macros.append({"macro": "{$FLT.CPU.MAX}", "value": str(a.gen_cpu_max)})
@@ -654,6 +745,8 @@ def cmd_setup(a):
         if found:
             hostid = found[0]["hostid"]
             api.call("host.update", {"hostid": hostid, "name": visible})
+            if agent:
+                ensure_agent_interface(api, hostid, addr)
             api.call("host.massadd", {"hosts": [{"hostid": hostid}], "templates": links,
                                       "groups": [{"groupid": gid}]})
             for m in macros:
@@ -664,11 +757,16 @@ def cmd_setup(a):
                     api.call("usermacro.create", dict(m, hostid=hostid))
             log(f"host atualizado: {host}")
         else:
+            iface = [{"type": 1, "main": 1, "useip": 1, "ip": addr, "dns": "", "port": "10050"}] if agent else []
             api.call("host.create", {"host": host, "name": visible, "groups": [{"groupid": gid}],
-                                     "templates": links, "macros": macros,
+                                     "templates": links, "macros": macros, "interfaces": iface,
                                      "tags": [{"tag": "flux-loadtest", "value": role}],
                                      "description": "Criado pelo flux-loadtest (WEB-1437). Dados por trapper."})
             log(f"host criado: {host}")
+    if a.scripts:
+        if not a.gen_agent:
+            die(E_USAGE, "--scripts exige --gen-agent IP (os scripts rodam no agent do host gen)")
+        setup_scripts(api, gid, a)
     return E_OK
 
 
@@ -779,6 +877,11 @@ def main():
     p.add_argument("--host", action="append", default=[], help="id:papel[:endereco[:nome]] (repetivel)")
     p.add_argument("--template", help="importa este YAML antes")
     p.add_argument("--gen-cpu-max", type=int, default=0)
+    p.add_argument("--gen-agent", default="", help="IP do zabbix-agentd do servidor de testes: interface "
+                   "agent e template de disparo no host gen")
+    p.add_argument("--scripts", action="store_true", help="cria/atualiza os scripts do menu Flux Loadtest")
+    p.add_argument("--script-usrgrp", default="", help="grupo de usuarios que pode executar os scripts")
+    p.add_argument("--profiles-dir", default="/etc/flux-loadtest/profiles.d")
 
     p = sub.add_parser("check", help="testa a API e o trapper")
     common_api(p)
@@ -796,6 +899,8 @@ def main():
         die(E_CONFIG, "ZABBIX_SERVER nao definido")
     if a.cmd in ("setup", "bootstrap") and not a.api_url:
         die(E_CONFIG, "ZABBIX_API_URL nao definido")
+    if a.cmd == "setup" and a.gen_agent and not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", a.gen_agent):
+        die(E_USAGE, f"--gen-agent invalido: {a.gen_agent} (IPv4)")
     if a.cmd == "bootstrap" and not a.token_file:
         die(E_CONFIG, "--token-file obrigatorio")
     handler = {"send": cmd_send, "setup": cmd_setup, "check": cmd_check, "bootstrap": cmd_bootstrap}[a.cmd]
