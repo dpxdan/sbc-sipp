@@ -15,6 +15,9 @@ serviços systemd no lugar dos processos dos containers.
 | `banco-slave-stfc` | Percona XtraDB Cluster 8.4.10 (nó 2) + keepalived (prioridade 100) | `mysql`, `keepalived` |
 | `sbc-stfc-interfaceweb` | nginx + PHP-FPM 7.3 (página PHP com sessão no banco pelo VIP) | `nginx`, `php7.3-fpm` |
 
+Sem orquestrador por SSH, os mesmos papéis podem ser instalados em cada VM com o
+`install/flux-host.sh lab <papel>` (veja [`install/README.md`](../../install/README.md)).
+
 Zabbix: um servidor existente (7.2.3 em produção). O `vmlab.sh zabbix` só importa os
 templates e cria os hosts; nada é instalado.
 

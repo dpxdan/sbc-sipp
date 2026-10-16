@@ -107,6 +107,7 @@ Consequências para o teste:
 | `dids.txt.example` | Formato do arquivo de DIDs e consulta para exportá-los do banco |
 | `lab/` | Laboratório STFC em Docker para validar o script sem tocar na produção: banco (Percona XtraDB Cluster 8.4.10 + keepalived), web (nginx 1.22.1 + PHP-FPM 7.3.33), OpenSIPS 3.6 e FreeSWITCH 1.11.3 reais com os scripts do Flux, Zabbix 7.2.3, acesso pelo macOS e registro de SIP devices (veja `lab/README.md`) |
 | `lab/vm/` | O mesmo laboratório em 6 VMs Debian 12, sem Docker: o `vmlab.sh` roda no servidor de testes e configura as outras 5 VMs por SSH, com systemd (veja `lab/vm/README.md`) |
+| `install/` | Instalador local por papel (`freeswitch`, `opensips`, `mysql`, `web`, `gen`): `flux-host.sh lab` instala o laboratório no próprio servidor; `flux-host.sh prepare` só prepara servidores existentes (STFC) para o teste (veja `install/README.md`) |
 
 ## 3. Requisitos
 
@@ -320,6 +321,9 @@ Numa VM de teste dentro da rede interna, use os IPs 172.17.4.x.
 ## 6. Preparação dos servidores
 
 Faça uma vez por ambiente, revisado pela equipe de infraestrutura.
+
+O `install/flux-host.sh prepare <papel>`, executado em cada servidor, faz as seções 6.2, 6.4
+(credencial de coleta) e 6.5 com plano, confirmação e backup (veja `install/README.md`).
 
 ### 6.1 Chaves SSH
 
