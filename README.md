@@ -108,6 +108,7 @@ Consequências para o teste:
 | `lab/` | Laboratório STFC em Docker para validar o script sem tocar na produção: banco (Percona XtraDB Cluster 8.4.10 + keepalived), web (nginx 1.22.1 + PHP-FPM 7.3.33), OpenSIPS 3.6 e FreeSWITCH 1.11.3 reais com os scripts do Flux, Zabbix 7.2.3, acesso pelo macOS e registro de SIP devices (veja `lab/README.md`) |
 | `bin/flux-loadtest-zbx` | Disparo de perfis pelo Zabbix: chamado pelo zabbix-agentd do servidor de testes (seção 19.6) |
 | `profiles/*.conf.example` | Perfis de teste para o disparo pelo Zabbix |
+| `deploy/stfc-fs02/` | Runbook e arquivos do primeiro teste em produção: gerador no `sbc-stfc-interfaceweb` (.165), carga direta no FreeSWITCH do `sbc-stfc-02` (.162) |
 | `lab/vm/` | O mesmo laboratório em 6 VMs Debian 12, sem Docker: o `vmlab.sh` roda no servidor de testes e configura as outras 5 VMs por SSH, com systemd (veja `lab/vm/README.md`) |
 | `install/` | Instalador local por papel (`freeswitch`, `opensips`, `mysql`, `web`, `gen`): `flux-host.sh lab` instala o laboratório no próprio servidor; `flux-host.sh prepare` só prepara servidores existentes (STFC) para o teste (veja `install/README.md`) |
 

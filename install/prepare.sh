@@ -239,12 +239,48 @@ prep_install_agent() {
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends zabbix-agent sudo python3
 }
 
-# Servidor de testes: zabbix-agentd + flux-loadtest-zbx para o disparo pelo Zabbix (README 19.6)
+# Linhas ativas do agentd (conf principal + includes, menos o nosso): PARAMETRO=valor
+zbx_agent_lines() {
+    local f
+    for f in "${PREP_ZBX_AGENT_CONF}" /etc/zabbix/zabbix_agentd.d/*.conf; do
+        [[ -r ${f} && ${f} != "${PREP_ZBX_INCLUDE}" ]] || continue
+        grep -hE "^[[:space:]]*$1=" "${f}" 2>/dev/null | sed 's/^[[:space:]]*//'
+    done
+}
+
+# Agent ja monitorado: avisa o que anularia a restricao do include ou impediria os scripts
+zbx_agent_audit() {
+    local servers
+    servers=$(zbx_agent_lines Server | cut -d= -f2- | tr -d ' ')
+    [[ -n ${servers} ]] || warn "agentd sem Server=: o Zabbix nao consegue executar os scripts (modo passivo)"
+    [[ -z ${servers} ]] || log "agentd: Server=${servers} (o Zabbix server/proxy do host precisa estar aqui)"
+    if zbx_agent_lines AllowKey | grep -qE '^AllowKey=system\.run\[\*\]'; then
+        warn "o agentd ja tem AllowKey=system.run[*]: a primeira regra vale e a restricao por perfil fica sem efeito"
+    fi
+    if zbx_agent_lines EnableRemoteCommands | grep -qE '=1'; then
+        warn "o agentd tem EnableRemoteCommands=1 (obsoleto): equivale a liberar qualquer system.run"
+    fi
+    if ! zbx_agent_lines Include | grep -q 'zabbix_agentd.d'; then
+        warn "${PREP_ZBX_AGENT_CONF} sem Include de /etc/zabbix/zabbix_agentd.d: o include do flux-loadtest nao seria lido"
+    fi
+}
+
+# Servidor de testes: zabbix-agentd + flux-loadtest-zbx para o disparo pelo Zabbix (README 19.6).
+# Agent ja instalado (servidor monitorado): o zabbix_agentd.conf nao e alterado; so o include,
+# o wrapper e o sudoers sao gravados.
 prep_zabbix_agent() {
     local src="${REPO_DIR}/bin/flux-loadtest-zbx" conf
     [[ -r ${src} ]] || die "wrapper ausente no repositorio: ${src}"
-    if dpkg -s zabbix-agent >/dev/null 2>&1; then
-        log "ok: zabbix-agent instalado ($(dpkg-query -W -f '${Version}' zabbix-agent))"
+    # estado antes da primeira passada (o plano e a aplicacao decidem igual)
+    if [[ -z ${PREP_ZBX_PREEXIST:-} ]]; then
+        if dpkg -s zabbix-agent >/dev/null 2>&1; then PREP_ZBX_PREEXIST=1; else PREP_ZBX_PREEXIST=0; fi
+    fi
+    if ((PREP_ZBX_PREEXIST)); then
+        log "ok: zabbix-agent ja instalado ($(dpkg-query -W -f '${Version}' zabbix-agent)): ${PREP_ZBX_AGENT_CONF} nao sera alterado"
+        if [[ -n ${ZBX_SERVER} && ${PREP_APPLY} == 0 ]]; then
+            warn "--zabbix-server ignorado: o agent ja e monitorado e o Server/ServerActive dele ficam como estao"
+        fi
+        if ((PREP_APPLY == 0)); then zbx_agent_audit; fi
     else
         [[ -n ${ZBX_SERVER} ]] || die "zabbix-agent ausente: informe --zabbix-server IP para instalar e configurar"
         prep_cmd "instalar o zabbix-agent 7.2 (repo.zabbix.com)" prep_install_agent
@@ -261,8 +297,8 @@ prep_zabbix_agent() {
         PREP_CHANGES=$((PREP_CHANGES + 2))
         return 0
     fi
-    if [[ -n ${ZBX_SERVER} ]]; then
-        # so o modo passivo: Server (quem consulta e executa) e sem ServerActive
+    if [[ -n ${ZBX_SERVER} ]] && ((PREP_ZBX_PREEXIST == 0)); then
+        # agent instalado agora: so o modo passivo: Server (quem consulta e executa) e sem ServerActive
         prep_file "${PREP_ZBX_AGENT_CONF}" 0644 root:root 0 zabbix_agentd -T -c "${PREP_ZBX_AGENT_CONF}" \
             < <(sed -E -e "s/^Server=.*/Server=${ZBX_SERVER}/" \
                        -e 's/^ServerActive=(.*)/# ServerActive=\1   # desativado pelo flux-host.sh (so passivo)/' \

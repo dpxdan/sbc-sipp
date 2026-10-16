@@ -377,6 +377,9 @@ cmd_check() {
                 chk "estado pelo usuario zabbix (sudo -n)" runuser -u zabbix -- sudo -n /usr/local/sbin/flux-loadtest-zbx state
                 v=$(zabbix_agentd -t flt.profiles.discovery 2>/dev/null | sed -n 's/.*\[t|\(.*\)\]$/\1/p') || true
                 [[ -n ${v} ]] && info "descoberta: ${v}"
+                for v in Server ServerActive Include AllowKey DenyKey EnableRemoteCommands; do
+                    zbx_agent_lines "${v}" | sed 's/^/  info  agentd: /'
+                done
                 ;;
             gen)
                 chk "sipp" command -v sipp
