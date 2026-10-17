@@ -1,0 +1,14 @@
+# profiles/todos.conf - SIP + MySQL + Web (README, secao 8.8). O sysbench exige o servidor de
+# testes na rede interna (VIP do banco).
+# Equivale a: flux-loadtest.sh run --confirm-prod -y -t sip,web,mysql -r 20 -H 20 -w 300
+
+DESC="SIP 20 CPS + sysbench + wrk"
+ZABBIX_ENABLED=0
+TESTS=sip,web,mysql
+CPS=20
+WINDOW=300
+HOLD=20
+MEDIA=rtp
+MYSQL_DURATION=120
+WEB_CONNS=50
+WEB_DURATION=60

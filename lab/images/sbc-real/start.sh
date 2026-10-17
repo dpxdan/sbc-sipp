@@ -56,9 +56,13 @@ done
 for ip in ${VIP} ${LAB_GEN_IP} ${LAB_FS_PUB_IPS} ${LAB_FS_INT_IPS}; do
     [[ ${ip} =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "IP invalido: ${ip}"
 done
-for d in freeswitch/scripts/flux freeswitch/fs freeswitch/conf/autoload_configs config; do
-    [[ -d ${FLUX_SRC}/${d} ]] || die "${FLUX_SRC}/${d} ausente: confira LAB_FLUX_SRC no .env (clone do repositorio sbc)"
-done
+has_role() { [[ " ${LAB_SIP_ROLES} " == *" $1 "* ]]; }
+# o clone do Flux so e usado pelo FreeSWITCH (xml_curl, dialplan, autoload_configs)
+if has_role fs; then
+    for d in freeswitch/scripts/flux freeswitch/fs freeswitch/conf/autoload_configs config; do
+        [[ -d ${FLUX_SRC}/${d} ]] || die "${FLUX_SRC}/${d} ausente: confira LAB_FLUX_SRC no .env (clone do repositorio sbc)"
+    done
+fi
 
 db() { MYSQL_PWD=${LAB_FLUX_DB_PASSWORD} mysql -h "${VIP}" -u fluxuser -N -B --connect-timeout=5 flux "$@"; }
 
@@ -316,7 +320,7 @@ EOF
 }
 
 wait_flux_db
-setup_flux_common
+if has_role fs; then setup_flux_common; fi
 for role in ${LAB_SIP_ROLES}; do
     case "${role}" in
         fs)       setup_fs ;;
@@ -325,7 +329,7 @@ for role in ${LAB_SIP_ROLES}; do
     esac
 done
 # OpenSIPS depois do FS local: o load_balancer conecta no event socket ao subir
-if [[ " ${LAB_SIP_ROLES} " == *" opensips "* ]]; then
+if has_role opensips; then
     setup_opensips
 fi
 date +%s > /run/flux-lab-started

@@ -80,6 +80,7 @@ declare -A CFG=(
     [RESULTS_DIR]="/var/lib/flux-loadtest/results"
     [ZABBIX_SERVER]="" [ZABBIX_PORT]="10051" [ZABBIX_HOST_PREFIX]="flt-" [ZABBIX_LIVE]="1"
     [ZABBIX_API_URL]="" [ZABBIX_API_TOKEN_FILE]="" [ZABBIX_TLS_INSECURE]="0"
+    [ZABBIX_GEN_AGENT]="" [ZABBIX_SCRIPT_USRGRP]="" [ZABBIX_PROFILES_DIR]="/etc/flux-loadtest/profiles.d"
 )
 
 load_config() {
@@ -145,6 +146,11 @@ validate_config() {
         || die "${E_CONFIG}" "ZABBIX_HOST_PREFIX invalido (letras, numeros, . _ -)"
     [[ ${CFG[ZABBIX_LIVE]} == [01] && ${CFG[ZABBIX_TLS_INSECURE]} == [01] ]] \
         || die "${E_CONFIG}" "ZABBIX_LIVE e ZABBIX_TLS_INSECURE devem ser 0 ou 1"
+    [[ -z ${CFG[ZABBIX_GEN_AGENT]} || ${CFG[ZABBIX_GEN_AGENT]} =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] \
+        || die "${E_CONFIG}" "ZABBIX_GEN_AGENT deve ser um IPv4: ${CFG[ZABBIX_GEN_AGENT]}"
+    [[ ${CFG[ZABBIX_SCRIPT_USRGRP]} =~ ^[A-Za-z0-9\ ._-]{0,64}$ ]] \
+        || die "${E_CONFIG}" "ZABBIX_SCRIPT_USRGRP invalido: ${CFG[ZABBIX_SCRIPT_USRGRP]}"
+    [[ ${CFG[ZABBIX_PROFILES_DIR]} == /* ]] || die "${E_CONFIG}" "ZABBIX_PROFILES_DIR deve ser caminho absoluto"
     [[ -z ${CFG[ZABBIX_API_URL]} || ${CFG[ZABBIX_API_URL]} =~ ^https?://[^[:space:]]+$ ]] \
         || die "${E_CONFIG}" "ZABBIX_API_URL invalida: ${CFG[ZABBIX_API_URL]}"
     [[ -z ${CFG[ZABBIX_API_TOKEN_FILE]} || ${CFG[ZABBIX_API_TOKEN_FILE]} == /* ]] \
@@ -769,9 +775,13 @@ usage_zabbix() {
     cat <<EOF
 Uso: $0 zabbix <sub> [opcoes] [-c ARQUIVO]
 
-  setup [--import-template]  cria o grupo "Flux Loadtest" e os hosts <ZABBIX_HOST_PREFIX><id>
+  setup [--import-template] [--scripts]
+                             cria o grupo "Flux Loadtest" e os hosts <ZABBIX_HOST_PREFIX><id>
                              (servidores da configuracao + gen + run) e vincula os templates.
                              --import-template importa antes ${ZBX_TEMPLATE#"${SCRIPT_DIR}/"}
+                             Com ZABBIX_GEN_AGENT, o host gen ganha a interface agent e o
+                             template de disparo; --scripts cria os scripts do menu Flux
+                             Loadtest (perfis de ZABBIX_PROFILES_DIR, grupo ZABBIX_SCRIPT_USRGRP)
   send <diretorio> [--force] [--dry-run]
                              importa uma execucao com os timestamps originais (--force reenvia
                              uma execucao ja enviada; --dry-run so mostra os valores)
@@ -780,7 +790,7 @@ EOF
 }
 
 cmd_zabbix() {
-    local sub=${1:-} opt import=0 force=0 dry=0 dir="" id
+    local sub=${1:-} opt import=0 scripts=0 force=0 dry=0 dir="" id
     (($# > 0)) && shift
     check_local_deps python3
     case "${sub}" in
@@ -788,6 +798,7 @@ cmd_zabbix() {
             for opt in "$@"; do
                 case "${opt}" in
                     --import-template) import=1 ;;
+                    --scripts) scripts=1 ;;
                     *) usage_zabbix >&2; die "${E_USAGE}" "opcao invalida para zabbix setup: ${opt}" ;;
                 esac
             done
@@ -795,6 +806,12 @@ cmd_zabbix() {
             zbx_api_args
             ZBX_ARGS+=(--prefix "${CFG[ZABBIX_HOST_PREFIX]}" --gen-cpu-max "${CFG[GUARD_MAX_GEN_CPU_PCT]}")
             ((import)) && ZBX_ARGS+=(--template "${ZBX_TEMPLATE}")
+            [[ -n ${CFG[ZABBIX_GEN_AGENT]} ]] && ZBX_ARGS+=(--gen-agent "${CFG[ZABBIX_GEN_AGENT]}")
+            if ((scripts)); then
+                [[ -n ${CFG[ZABBIX_GEN_AGENT]} ]] || die "${E_CONFIG}" "--scripts exige ZABBIX_GEN_AGENT (IP do zabbix-agentd do servidor de testes)"
+                ZBX_ARGS+=(--scripts --profiles-dir "${CFG[ZABBIX_PROFILES_DIR]}")
+                [[ -n ${CFG[ZABBIX_SCRIPT_USRGRP]} ]] && ZBX_ARGS+=(--script-usrgrp "${CFG[ZABBIX_SCRIPT_USRGRP]}")
+            fi
             for id in "${HOST_IDS[@]}"; do
                 ZBX_ARGS+=(--host "${id}:${HOST_ROLE[${id}]}:${HOST_ADDR[${id}]}")
             done

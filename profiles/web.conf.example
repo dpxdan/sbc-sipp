@@ -1,0 +1,8 @@
+# profiles/web.conf - so web: nginx estatico e pagina PHP (README, secao 8.7)
+# Equivale a: flux-loadtest.sh run --confirm-prod -y -t web --web-conns 50 --web-duration 60
+
+DESC="Web: wrk 50 conexoes por 60 s em cada alvo"
+ZABBIX_ENABLED=1
+TESTS=web
+WEB_CONNS=50
+WEB_DURATION=60

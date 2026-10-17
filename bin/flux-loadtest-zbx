@@ -1,0 +1,317 @@
+#!/usr/bin/env bash
+#
+# flux-loadtest-zbx - disparo de perfis do flux-loadtest pelo Zabbix (WEB-1437)
+#
+# Instalado em /usr/local/sbin (root, 0755) no servidor de testes. O zabbix-agentd o chama
+# com "sudo -n" (sudoers restrito a este arquivo), por UserParameter (discovery, state) e
+# por system.run dos scripts globais (start, stop, plan), com AllowKey exato por perfil.
+#
+# Subcomandos:
+#   discovery        JSON da descoberta (LLD) dos perfis com ZABBIX_ENABLED=1
+#   state            JSON do estado: execucao em andamento e ultimo resultado de cada perfil
+#   start PERFIL     inicia o perfil numa unidade systemd transitoria e retorna na hora
+#   stop             parada suave da execucao (SIGINT no flux-loadtest.sh, como o Ctrl+C)
+#   plan PERFIL      plano do run (--dry-run), resumido
+#   list             nomes dos perfis habilitados (um por linha)
+#   agent-conf       include do zabbix-agentd para os perfis habilitados (UserParameter,
+#                    AllowKey exato por perfil e DenyKey=system.run[*])
+#   finish PERFIL    uso interno: ExecStopPost da unidade grava o resultado no estado
+#
+# Perfis: PROFILES_DIR/<nome>.conf (profiles/*.conf.example), CHAVE=valor lido como dado.
+# Configuracao: /etc/flux-loadtest/zabbix-runner.conf (opcional; chaves em RUNNER abaixo).
+# Codigos de saida: 0 ok, 2 uso, 3 configuracao/perfil invalido, 5 recusado (ja em execucao).
+
+set -Eeuo pipefail
+export LC_ALL=C
+umask 022
+
+readonly E_USAGE=2 E_CONFIG=3 E_BUSY=5
+readonly UNIT=flux-loadtest-zbx
+readonly SELF_BIN=/usr/local/sbin/flux-loadtest-zbx
+# So para testes: o sudo (env_reset) descarta esta variavel nas chamadas do Zabbix
+RUNNER_CONF=${FLT_ZBX_RUNNER_CONF:-/etc/flux-loadtest/zabbix-runner.conf}
+
+die() { local c=$1; shift; printf 'ERRO: %s\n' "$*"; exit "${c}"; }
+
+declare -A RUNNER=(
+    [FLT_BIN]=/opt/flux-loadtest/flux-loadtest.sh
+    [FLT_CONF]=/etc/flux-loadtest/loadtest.conf
+    [PROFILES_DIR]=/etc/flux-loadtest/profiles.d
+    [STATE_FILE]=/var/lib/flux-loadtest/zbx-state.json
+    [ZBX_MAX_CPS]=50
+    [ZBX_MAX_WINDOW]=3600
+)
+
+# Chaves aceitas no perfil (vazio = padrao do flux-loadtest.sh)
+readonly PROFILE_KEYS="DESC ZABBIX_ENABLED TESTS CPS CPS_START RAMP_STEP RAMP_INTERVAL WINDOW CALLS HOLD MEDIA WEB_DURATION WEB_CONNS MYSQL_DURATION LABEL"
+declare -A P=()
+
+# read_kv ARQUIVO NOME_DO_ARRAY CHAVES_ACEITAS: CHAVE=valor, sem executar nada
+read_kv() {
+    local file=$1 allowed=" $3 " line key val n=0
+    local -n dst=$2
+    while IFS= read -r line || [[ -n ${line} ]]; do
+        n=$((n + 1))
+        line=${line%$'\r'}
+        [[ ${line} =~ ^[[:space:]]*(#|$) ]] && continue
+        [[ ${line} =~ ^([A-Z][A-Z0-9_]*)=(.*)$ ]] || die "${E_CONFIG}" "${file}:${n}: linha invalida"
+        key=${BASH_REMATCH[1]}
+        val=${BASH_REMATCH[2]}
+        [[ ${allowed} == *" ${key} "* ]] || die "${E_CONFIG}" "${file}:${n}: chave desconhecida: ${key}"
+        if [[ ${val} =~ ^\"(.*)\"$ || ${val} =~ ^\'(.*)\'$ ]]; then
+            val=${BASH_REMATCH[1]}
+        fi
+        # shellcheck disable=SC2034,SC2004  # dst e nameref de array associativo
+        dst[${key}]=${val}
+    done < "${file}"
+}
+
+load_runner() {
+    if [[ -e ${RUNNER_CONF} ]]; then
+        read_kv "${RUNNER_CONF}" RUNNER "${!RUNNER[*]}"
+    fi
+    [[ ${RUNNER[ZBX_MAX_CPS]} =~ ^[0-9]+$ && ${RUNNER[ZBX_MAX_WINDOW]} =~ ^[0-9]+$ ]] \
+        || die "${E_CONFIG}" "${RUNNER_CONF}: ZBX_MAX_CPS e ZBX_MAX_WINDOW devem ser inteiros"
+}
+
+valid_name() { [[ ${1:-} =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]]; }
+
+# load_profile NOME: preenche P e valida; falha com mensagem (codigo 3)
+load_profile() {
+    local name=$1 file k
+    valid_name "${name}" || die "${E_USAGE}" "nome de perfil invalido: '${name}' ([a-z0-9-], ate 32)"
+    file="${RUNNER[PROFILES_DIR]}/${name}.conf"
+    [[ -r ${file} ]] || die "${E_CONFIG}" "perfil inexistente: ${name} (${file})"
+    P=()
+    for k in ${PROFILE_KEYS}; do P[${k}]=""; done
+    P[ZABBIX_ENABLED]=0
+    read_kv "${file}" P "${PROFILE_KEYS}"
+    [[ ${P[ZABBIX_ENABLED]} == [01] ]] || die "${E_CONFIG}" "${name}: ZABBIX_ENABLED deve ser 0 ou 1"
+    [[ ${P[TESTS]} =~ ^(sip|web|mysql)(,(sip|web|mysql)){0,2}$ ]] || die "${E_CONFIG}" "${name}: TESTS invalido: '${P[TESTS]}' (sip, web, mysql)"
+    for k in CPS CPS_START RAMP_STEP RAMP_INTERVAL WINDOW CALLS HOLD WEB_DURATION WEB_CONNS MYSQL_DURATION; do
+        [[ -z ${P[${k}]} || ${P[${k}]} =~ ^[0-9]{1,6}$ ]] || die "${E_CONFIG}" "${name}: ${k} deve ser inteiro: '${P[${k}]}'"
+    done
+    [[ -z ${P[MEDIA]} || ${P[MEDIA]} == rtp || ${P[MEDIA]} == none ]] || die "${E_CONFIG}" "${name}: MEDIA deve ser rtp ou none"
+    [[ -z ${P[LABEL]} || ${P[LABEL]} =~ ^[a-z0-9-]{1,32}$ ]] || die "${E_CONFIG}" "${name}: LABEL invalido ([a-z0-9-], ate 32)"
+    [[ ${P[DESC]} =~ ^[[:print:]]{0,120}$ ]] || die "${E_CONFIG}" "${name}: DESC com caracteres invalidos ou acima de 120"
+    if [[ ,${P[TESTS]}, == *,sip,* ]]; then
+        [[ -n ${P[CPS]} ]] || die "${E_CONFIG}" "${name}: CPS obrigatorio com TESTS=sip"
+        ((P[CPS] >= 1 && P[CPS] <= RUNNER[ZBX_MAX_CPS])) || die "${E_CONFIG}" "${name}: CPS ${P[CPS]} fora de 1-${RUNNER[ZBX_MAX_CPS]} (ZBX_MAX_CPS)"
+    fi
+    [[ -z ${P[WINDOW]} ]] || ((P[WINDOW] <= RUNNER[ZBX_MAX_WINDOW])) \
+        || die "${E_CONFIG}" "${name}: WINDOW ${P[WINDOW]} acima de ZBX_MAX_WINDOW (${RUNNER[ZBX_MAX_WINDOW]})"
+}
+
+label_of() { printf 'zbx-%s' "${P[LABEL]:-$1}"; }
+
+# Argumentos do "flux-loadtest.sh run" para o perfil carregado em P
+RUN_ARGS=()
+build_args() {
+    local name=$1 k opt
+    RUN_ARGS=(run -c "${RUNNER[FLT_CONF]}" -t "${P[TESTS]}" --label "$(label_of "${name}")")
+    for k in CPS:-r CPS_START:--cps-start RAMP_STEP:--ramp-step RAMP_INTERVAL:--ramp-interval \
+             WINDOW:-w CALLS:-n HOLD:-H MEDIA:-M WEB_DURATION:--web-duration WEB_CONNS:--web-conns \
+             MYSQL_DURATION:--mysql-duration; do
+        opt=${k#*:}
+        k=${k%%:*}
+        [[ -z ${P[${k}]} ]] || RUN_ARGS+=("${opt}" "${P[${k}]}")
+    done
+}
+
+# Valor de uma chave do loadtest.conf (somente leitura, sem executar o arquivo)
+flt_conf_value() {
+    awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); gsub(/^["\x27]|["\x27]$/, ""); v = $0 } END { print v }' "${RUNNER[FLT_CONF]}"
+}
+
+enabled_profiles() {
+    local f name
+    [[ -d ${RUNNER[PROFILES_DIR]} ]] || return 0
+    for f in "${RUNNER[PROFILES_DIR]}"/*.conf; do
+        [[ -e ${f} ]] || continue
+        name=${f##*/}
+        name=${name%.conf}
+        valid_name "${name}" || continue
+        # perfil invalido fica fora da descoberta (o erro aparece no "plan" ou no "start")
+        ( load_profile "${name}" >/dev/null 2>&1 && [[ ${P[ZABBIX_ENABLED]} == 1 ]] ) || continue
+        printf '%s\n' "${name}"
+    done
+}
+
+unit_active() { systemctl is-active --quiet "${UNIT}" 2>/dev/null; }
+
+require_root() { ((EUID == 0)) || die "${E_USAGE}" "rode como root (o Zabbix usa sudo -n)"; }
+
+# json_state ACAO [ARGS]: le e grava o estado com o python3 (JSON valido, gravacao atomica)
+json_state() {
+    python3 - "${RUNNER[STATE_FILE]}" "$@" <<'PY'
+import json, os, sys, tempfile, time
+path, action, args = sys.argv[1], sys.argv[2], sys.argv[3:]
+try:
+    with open(path) as f:
+        st = json.load(f)
+    if not isinstance(st, dict):
+        st = {}
+except (OSError, ValueError):
+    st = {}
+st.setdefault("last", {})
+now = int(time.time())
+if action == "start":
+    st.update(running=1, profile=args[0], started=now, unit=args[1])
+elif action == "finish":
+    prof, rc, result, run_dir = args
+    st["last"][prof] = {"rc": int(rc) if rc.lstrip("-").isdigit() else -1, "ts": now,
+                        "result": result, "run_dir": run_dir}
+    if st.get("profile") == prof:
+        st.update(running=0, profile="", started=0)
+elif action == "show":
+    st["running"] = int(args[0])
+    if not st["running"]:
+        st.update(profile="", started=0)
+    st.setdefault("profile", "")
+    st.setdefault("started", 0)
+    st["unit"] = args[1]
+    print(json.dumps(st, sort_keys=True, separators=(",", ":")))
+    sys.exit(0)
+d = os.path.dirname(path)
+os.makedirs(d, exist_ok=True)
+fd, tmp = tempfile.mkstemp(dir=d, prefix=".zbx-state.")
+with os.fdopen(fd, "w") as f:
+    json.dump(st, f, sort_keys=True)
+os.chmod(tmp, 0o644)
+os.replace(tmp, path)
+PY
+}
+
+lock() {
+    install -d -m 0755 "$(dirname "${RUNNER[STATE_FILE]}")"
+    exec 9>"${RUNNER[STATE_FILE]}.lock"
+    flock -w 5 9 || die "${E_BUSY}" "outra operacao do flux-loadtest-zbx em andamento"
+}
+
+# --------------------------------------------------------------- subcomandos
+cmd_discovery() {
+    local name
+    enabled_profiles | while read -r name; do
+        load_profile "${name}"
+        printf '%s\t%s\t%s\n' "${name}" "${P[DESC]}" "${P[TESTS]}"
+    done | python3 -c '
+import json, sys
+rows = [l.rstrip("\n").split("\t") for l in sys.stdin if l.strip()]
+print(json.dumps([{"{#PROFILE}": r[0], "{#DESC}": r[1], "{#TESTS}": r[2]} for r in rows],
+                 separators=(",", ":")))'
+}
+
+cmd_state() {
+    local running=0
+    unit_active && running=1
+    json_state show "${running}" "${UNIT}"
+}
+
+cmd_start() {
+    local name=${1:-} fspass
+    require_root
+    load_profile "${name}"
+    [[ ${P[ZABBIX_ENABLED]} == 1 ]] || die "${E_CONFIG}" "perfil ${name} sem ZABBIX_ENABLED=1"
+    [[ -x ${RUNNER[FLT_BIN]} ]] || die "${E_CONFIG}" "flux-loadtest.sh ausente: ${RUNNER[FLT_BIN]} (FLT_BIN)"
+    [[ -r ${RUNNER[FLT_CONF]} ]] || die "${E_CONFIG}" "configuracao ausente: ${RUNNER[FLT_CONF]} (FLT_CONF)"
+    if [[ ,${P[TESTS]}, == *,sip,* ]]; then
+        # sem terminal nao ha --fs-password: sem o arquivo, as metricas fs_* ficam vazias
+        fspass=$(flt_conf_value FS_CLI_PASSWORD_FILE)
+        [[ -n ${fspass} && -r ${fspass} ]] || die "${E_CONFIG}" "FS_CLI_PASSWORD_FILE vazio ou ilegivel em ${RUNNER[FLT_CONF]}"
+    fi
+    build_args "${name}"
+    lock
+    if unit_active; then
+        die "${E_BUSY}" "ja ha um teste em execucao ($(json_state show 1 "${UNIT}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("profile") or "?")')); use stop antes"
+    fi
+    systemctl reset-failed "${UNIT}" >/dev/null 2>&1 || true
+    systemd-run --quiet --unit="${UNIT}" --collect \
+        --description="flux-loadtest (Zabbix): perfil ${name}" \
+        --setenv=FLT_ZBX_RUNNER_CONF="${RUNNER_CONF}" \
+        --property=TimeoutStopSec=900 \
+        --property=ExecStopPost="${SELF_BIN} finish ${name}" \
+        "${RUNNER[FLT_BIN]}" "${RUN_ARGS[@]}" --confirm-prod -y \
+        || die "${E_CONFIG}" "systemd-run falhou (journalctl -u ${UNIT})"
+    json_state start "${name}" "${UNIT}"
+    printf 'iniciado: perfil %s (unidade %s, rotulo %s). Acompanhe no host <prefixo>run; parar: stop\n' \
+        "${name}" "${UNIT}" "$(label_of "${name}")"
+}
+
+cmd_stop() {
+    require_root
+    if ! unit_active; then
+        printf 'nenhum teste em execucao\n'
+        return 0
+    fi
+    # so no processo principal: o flux-loadtest.sh para SIPp/wrk/sysbench de forma suave,
+    # faz o cooldown e gera o relatorio (codigo 6)
+    systemctl kill --kill-whom=main --signal=SIGINT "${UNIT}"
+    printf 'parada suave solicitada (cooldown e relatorio seguem; codigo 6)\n'
+}
+
+cmd_finish() {
+    local name=${1:-} rc=${EXIT_STATUS:-} result=${SERVICE_RESULT:-?} results run_dir=""
+    require_root
+    valid_name "${name}" || die "${E_USAGE}" "finish: perfil invalido"
+    [[ ${EXIT_CODE:-exited} == exited && ${rc} =~ ^[0-9]+$ ]] || rc=-1
+    P=([LABEL]="")
+    load_profile "${name}" >/dev/null 2>&1 || true
+    results=$(flt_conf_value RESULTS_DIR 2>/dev/null || true)
+    results=${results:-/var/lib/flux-loadtest/results}
+    run_dir=$(find "${results}" -maxdepth 1 -type d -name "*-$(label_of "${name}")" -printf '%T@ %p\n' 2>/dev/null \
+        | sort -nr | awk 'NR == 1 { print $2 }') || true
+    lock
+    json_state finish "${name}" "${rc}" "${result}" "${run_dir}"
+}
+
+cmd_plan() {
+    local name=${1:-}
+    load_profile "${name}"
+    build_args "${name}"
+    printf 'perfil %s: %s\n' "${name}" "${P[DESC]:-sem descricao}"
+    printf 'flux-loadtest.sh'
+    printf ' %q' "${RUN_ARGS[@]}" --confirm-prod -y
+    printf '\n\n'
+    timeout 25 "${RUNNER[FLT_BIN]}" "${RUN_ARGS[@]}" --dry-run 2>&1 | head -n 60 || true
+}
+
+cmd_agent_conf() {
+    local name cmd="sudo -n ${SELF_BIN}"
+    printf '# gerado por flux-loadtest-zbx agent-conf (flux-loadtest, WEB-1437): nao editar\n'
+    printf '# Comandos remotos so para os perfis habilitados; qualquer outro system.run e recusado.\n'
+    printf 'UserParameter=flt.profiles.discovery,%s discovery\n' "${cmd}"
+    printf 'UserParameter=flt.runner.state,%s state\n' "${cmd}"
+    printf 'AllowKey=system.run[%s stop]\n' "${cmd}"
+    printf 'AllowKey=system.run[%s state]\n' "${cmd}"
+    enabled_profiles | while read -r name; do
+        printf 'AllowKey=system.run[%s start %s]\n' "${cmd}" "${name}"
+        printf 'AllowKey=system.run[%s plan %s]\n' "${cmd}" "${name}"
+    done
+    printf 'DenyKey=system.run[*]\n'
+}
+
+usage() {
+    sed -n '3,25p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+main() {
+    local sub=${1:-}
+    (($# > 0)) && shift
+    case "${sub}" in
+        -h|--help|help|"") usage; return 0 ;;
+    esac
+    load_runner
+    case "${sub}" in
+        discovery)  cmd_discovery ;;
+        state)      cmd_state ;;
+        list)       enabled_profiles ;;
+        start)      (($# == 1)) || die "${E_USAGE}" "uso: start PERFIL"; cmd_start "$1" ;;
+        stop)       (($# == 0)) || die "${E_USAGE}" "uso: stop"; cmd_stop ;;
+        plan)       (($# == 1)) || die "${E_USAGE}" "uso: plan PERFIL"; cmd_plan "$1" ;;
+        finish)     cmd_finish "${1:-}" ;;
+        agent-conf) cmd_agent_conf ;;
+        *)          die "${E_USAGE}" "subcomando invalido: ${sub} (veja --help)" ;;
+    esac
+}
+
+main "$@"

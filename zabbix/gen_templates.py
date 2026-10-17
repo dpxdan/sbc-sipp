@@ -12,6 +12,14 @@ Os templates descrevem os dados que o lib/flux_zabbix.py envia por trapper:
   flt.mysql   JSON do sysbench (intervalos e resumo)              (host <prefixo>run)
   flt.run.info, flt.phase, flt.guard, flt.result                  (host <prefixo>run)
 
+Template "Disparo" (host <prefixo>gen, interface agent): itens passivos do zabbix-agentd do
+servidor de testes (UserParameter do bin/flux-loadtest-zbx agent-conf):
+
+  flt.runner.state          JSON do estado (execucao em andamento e ultimo resultado por perfil)
+  flt.profiles.discovery    descoberta dos perfis habilitados (LLD {#PROFILE}, {#DESC}, {#TESTS})
+
+O disparo em si sao scripts globais (lib/flux_zabbix.py setup --scripts), nao itens.
+
 Cada item final e DEPENDENT do master, extraido por JSONPath; campo ausente no JSON
 descarta o valor (um mesmo master serve a varios papeis e alvos).
 
@@ -37,6 +45,7 @@ T_DB = "Flux Loadtest - MySQL PXC"
 T_WEB = "Flux Loadtest - Web"
 T_GEN = "Flux Loadtest - Gerador"
 T_RUN = "Flux Loadtest - Execucao"
+T_TRIG = "Flux Loadtest - Disparo"
 
 # Cores das series nos graficos
 COLORS = ["1A7C11", "F63100", "2774A4", "A54F10", "FC6EA3", "6C59DC", "AC8C14", "611F27"]
@@ -612,6 +621,8 @@ def emit(version):
         (tpl, "Flux LT: sysbench", ["flt.mysql[tps_now]", "flt.mysql[lat95_now_ms]"]),
     ]
 
+    emit_trigger_template(y)
+
     y.add(1, "graphs:")
     for tpl, name, keys in graphs:
         y.add(2, f"- uuid: {uid(tpl, 'graph', name)}")
@@ -625,6 +636,107 @@ def emit(version):
             y.add(6, f"host: {q(tpl)}")
             y.add(6, f"key: {q(k)}")
     return "\n".join(y.lines) + "\n"
+
+
+def jsonpath_dep(y, ind, tpl, key, name, path, vtype, master, units="", desc="", tags=()):
+    """Item (ou prototype) dependente com JSONPath no nivel de indentacao ind."""
+    y.add(ind, f"- uuid: {uid(tpl, key)}")
+    y.add(ind + 1, f"name: {q(name)}")
+    y.add(ind + 1, "type: DEPENDENT")
+    y.add(ind + 1, f"key: {q(key)}")
+    y.add(ind + 1, "delay: '0'")
+    y.add(ind + 1, "history: 90d")
+    if vtype in ("CHAR", "TEXT"):
+        y.add(ind + 1, "trends: '0'")
+    y.add(ind + 1, f"value_type: {vtype}")
+    if units:
+        y.add(ind + 1, f"units: {q(units)}")
+    if desc:
+        y.add(ind + 1, f"description: {q(desc)}")
+    y.add(ind + 1, "preprocessing:")
+    y.add(ind + 2, "- type: JSONPATH")
+    y.add(ind + 3, "parameters:")
+    y.add(ind + 4, f"- {q(path)}")
+    y.add(ind + 3, "error_handler: DISCARD_VALUE")
+    y.add(ind + 1, "master_item:")
+    y.add(ind + 2, f"key: {q(master)}")
+    tags_block(y, ind + 1, list(tags))
+
+
+def emit_trigger_template(y):
+    """Template do disparo pelo Zabbix: agent passivo no servidor de testes."""
+    tpl = T_TRIG
+    st = "flt.runner.state"
+    y.add(2, f"- uuid: {uid('template', tpl)}")
+    y.add(3, f"template: {q(tpl)}")
+    y.add(3, f"name: {q(tpl)}")
+    y.add(3, f"description: {q('Disparo de perfis do flux-loadtest pelo Zabbix (host <prefixo>gen com interface agent). Itens do zabbix-agentd (bin/flux-loadtest-zbx); iniciar e parar pelos scripts do menu Flux Loadtest.')}")
+    y.add(3, "groups:")
+    y.add(4, f"- name: {q(GROUP)}")
+    y.add(3, "items:")
+    y.add(4, f"- uuid: {uid(tpl, st)}")
+    y.add(5, f"name: {q('Estado do disparo (JSON)')}")
+    y.add(5, f"key: {q(st)}")
+    y.add(5, "delay: 30s")
+    y.add(5, "history: 1d")
+    y.add(5, "trends: '0'")
+    y.add(5, "value_type: TEXT")
+    y.add(5, f"description: {q('sudo -n flux-loadtest-zbx state: execucao em andamento e ultimo resultado de cada perfil.')}")
+    tags_block(y, 5, [("component", "raw")])
+    y.add(5, "triggers:")
+    trigger_block(y, 6, tpl, {
+        "expr": f"nodata(/{tpl}/{st},{{$FLT.TRIG.NODATA}})=1",
+        "name": "Disparo: zabbix-agentd sem estado do flux-loadtest-zbx",
+        "priority": "WARNING",
+        "desc": "Confira o include do agent (flux-host.sh prepare zabbix-agent), o sudoers e o wrapper.",
+        "tags": [("scope", "disparo")]})
+    tags = [("component", "disparo")]
+    jsonpath_dep(y, 4, tpl, "flt.runner.running", "Teste disparado pelo Zabbix em execucao", "$.running",
+                 "UNSIGNED", st, tags=tags)
+    y.add(5, "triggers:")
+    trigger_block(y, 6, tpl, {
+        "expr": f"last(/{tpl}/flt.runner.running)=1",
+        "name": "Teste de carga disparado pelo Zabbix em execucao",
+        "priority": "INFO",
+        "desc": "Informativo: aparece enquanto a unidade flux-loadtest-zbx estiver ativa. Parar: script \"Parar teste\".",
+        "tags": [("scope", "disparo")]})
+    jsonpath_dep(y, 4, tpl, "flt.runner.profile", "Perfil em execucao", "$.profile", "CHAR", st, tags=tags)
+    jsonpath_dep(y, 4, tpl, "flt.runner.started", "Inicio da execucao em andamento", "$.started",
+                 "UNSIGNED", st, units="unixtime", tags=tags)
+    y.add(3, "macros:")
+    y.add(4, f"- macro: {q('{$FLT.TRIG.NODATA}')}")
+    y.add(5, f"value: {q('5m')}")
+    y.add(5, f"description: {q('Sem estado do agent por este tempo = disparo indisponivel')}")
+
+    y.add(3, "discovery_rules:")
+    y.add(4, f"- uuid: {uid(tpl, 'flt.profiles.discovery')}")
+    y.add(5, f"name: {q('Perfis do flux-loadtest')}")
+    y.add(5, f"key: {q('flt.profiles.discovery')}")
+    y.add(5, "delay: 10m")
+    y.add(5, "lifetime: 7d")
+    y.add(5, f"description: {q('Perfis com ZABBIX_ENABLED=1 em /etc/flux-loadtest/profiles.d (flux-loadtest-zbx discovery).')}")
+    y.add(5, "item_prototypes:")
+    ptags = [("component", "perfil"), ("profile", "{#PROFILE}")]
+    rc_key = "flt.profile.last_rc[{#PROFILE}]"
+    for key, name, path, vt, units in [
+        (rc_key, "Perfil {#PROFILE}: codigo da ultima execucao", "$.last['{#PROFILE}'].rc", "FLOAT", ""),
+        ("flt.profile.last_ts[{#PROFILE}]", "Perfil {#PROFILE}: fim da ultima execucao", "$.last['{#PROFILE}'].ts", "UNSIGNED", "unixtime"),
+        ("flt.profile.last_result[{#PROFILE}]", "Perfil {#PROFILE}: resultado do systemd", "$.last['{#PROFILE}'].result", "CHAR", ""),
+        ("flt.profile.last_dir[{#PROFILE}]", "Perfil {#PROFILE}: diretorio do resultado", "$.last['{#PROFILE}'].run_dir", "CHAR", ""),
+    ]:
+        jsonpath_dep(y, 6, tpl, key, name, path, vt, st, units=units, desc="{#DESC} (testes: {#TESTS})", tags=ptags)
+        if key == rc_key:
+            ref = f"/{tpl}/{rc_key}"
+            y.add(7, "trigger_prototypes:")
+            for t in [
+                {"expr": f"last({ref})=6", "name": "Perfil {#PROFILE}: ultima execucao interrompida (guard ou operador)",
+                 "priority": "WARNING", "desc": "Codigo 6: limite de seguranca atingido ou parada pelo script \"Parar teste\". Veja o relatorio no diretorio do resultado.",
+                 "tags": [("scope", "disparo")]},
+                {"expr": f"last({ref})<>0 and last({ref})<>6", "name": "Perfil {#PROFILE}: ultima execucao falhou (codigo {ITEM.LASTVALUE1})",
+                 "priority": "HIGH", "desc": "Codigos: 2 uso, 3 configuracao, 4 dependencia, 5 falha remota, -1 encerrado por sinal. Veja journalctl -u flux-loadtest-zbx.",
+                 "tags": [("scope", "disparo")]},
+            ]:
+                trigger_block(y, 8, tpl, t)
 
 
 def valuemaps_block(y, tpl, names):
