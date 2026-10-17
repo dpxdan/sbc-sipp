@@ -32,6 +32,7 @@ resultado é um relatório `.txt` por execução, com os dados brutos ao lado.
 17. [Solução de problemas](#17-solução-de-problemas)
 18. [Limitações](#18-limitações)
 19. [Zabbix](#19-zabbix)
+20. [Validação em 2 VMs (Parallels)](#20-validação-em-2-vms-parallels)
 
 ---
 
@@ -1306,6 +1307,8 @@ saturar, porque nesse caso os números deixam de representar os servidores.
 | Item do Zabbix sem "último valor" após importação | O Zabbix só mostra como último valor dados das últimas 24 h | Ver em Monitoramento > Últimos dados > Histórico, ou nos gráficos com o período da execução |
 | `udp_rcvbuf_err_s` alto na VM com `--media rtp` | O rtpstream do SIPp não consome o RTP devolvido pelo FS | Esperado; não afeta o teste |
 | Aviso de `ulimit -n` | Limite de arquivos abertos baixo | Rodar como root ou ajustar `/etc/security/limits.conf` |
+| `run` para logo após "snapshots pre salvos" com `falha na linha ...: [[ -n ${CFG[DB_VIP]} ]]` | Versão anterior à correção do `collector_args`: MySQL sem VIP (`DB_VIP` vazio) ou web sem `FPM_STATUS_URL` abortavam o `run` (o `smoke` não passa por ali) | Atualizar o `flux-loadtest.sh` (seção 20.4); contorno: `DB_VIP=<IP do banco>` |
+| INVITE -> 100 de segundos, sem falhas SIP | FreeSWITCH saturado: as chamadas completam, mas a fila de sinalização cresce | Ver a CPU do FS e o `fs_idle_cpu`; reduzir o CPS (seção 20.5) |
 
 ## 18. Limitações
 
@@ -1483,3 +1486,170 @@ Validado com Zabbix 7.2.3 e zabbix-agent 7.2 em Debian 12 (com um `flux-loadtest
 importação do template, criação idempotente dos scripts, lista de perfis, recusa de valor fora
 da lista, início, recusa de segundo início, parada suave com código 6, LLD e gatilhos. No 7.2,
 script executado no agent tem timeout fixo de 30 s (o `plan` corta em 25 s).
+
+## 20. Validação em 2 VMs (Parallels)
+
+Validação de 2026-10-17: o script numa VM e o FreeSWITCH com a stack Flux completa
+(xml_curl, dialplan Lua, MySQL local, sem OpenSIPS) noutra, as duas no Parallels do macOS.
+Serve de roteiro para repetir o teste e de referência para comparar resultados.
+
+### 20.1 Ambiente
+
+| VM | Hostname | IP | Recursos | Papel |
+|---|---|---|---|---|
+| VM-A | `pabx-asterisk` | 192.168.15.27 | 2 vCPU, 3,9 GB | flux-loadtest: SIPp originador (5060) e atendedor (5090) |
+| VM-B | `sbc-master` | 192.168.15.53 | 4 vCPU, 7,9 GB | FreeSWITCH 1.11.3 (perfil `default` em 5060), MySQL local, PHP-FPM/nginx do xml_curl |
+
+Na VM-B, o `status` do FreeSWITCH mostrou `2000 session(s) max` e `max 50` sessões por
+segundo. Os IPs da tabela são os da rede usada no teste; substitua pelos seus.
+
+### 20.2 Preparação da VM-B (FreeSWITCH + banco)
+
+1. Confirmar o Flux com suporte a `acl_lb_networks` (migração `update-02-09-2026.sql`):
+   `grep -l acl_lb_networks /var/www/html/fs/lib/flux.xml.php`.
+2. Descobrir a porta do perfil `default` (vai no `SIP_TARGET`):
+   `fs_cli -x 'sofia status profile default'`.
+3. Usuário de coleta, sudoers do `fs_cli` e credencial do MySQL (seção 6 e `install/README.md`):
+
+```bash
+/opt/flux-loadtest/install/flux-host.sh prepare freeswitch mysql --monitor-pass-file /root/flux_monitor.pass --create-db-user
+```
+
+4. Liberar o IP da VM-A na ACL `default` com os SQL de `deploy/stfc-fs02/sql/`, trocando antes
+   o IP do gerador de produção pelo da VM-A:
+
+```bash
+cd /opt/flux-loadtest/deploy/stfc-fs02/sql && sed -i 's/200\.159\.177\.165/192.168.15.27/g' 10-acl-lb-add.sql 90-acl-lb-restore.sql 95-dids-remove.sql 20-dids-create.sql
+```
+
+```bash
+mysql flux < 10-acl-lb-add.sql && fs_cli -x reloadacl && fs_cli -x 'acl 192.168.15.27 default'
+```
+
+   O último comando deve responder `true`.
+
+5. Conta de teste sem tarifa (`maxchannels` de 100 ou mais) e 1.000 DIDs DIRECT-IP para
+   `192.168.15.27:5090` com `20-dids-create.sql` (`@conta` e `@prefixo` preenchidos); lista
+   exportada para a VM-A em `/etc/flux-loadtest/dids.txt`.
+
+### 20.3 Preparação da VM-A (gerador)
+
+1. `install/flux-host.sh prepare gen` e `loadtest.conf` a partir de
+   `deploy/stfc-fs02/loadtest.conf`, com:
+
+```
+FS_HOSTS=192.168.15.53
+SIP_TARGET=192.168.15.53:5060
+SIP_LOCAL_IP=192.168.15.27
+DB_HOSTS=192.168.15.53
+DB_VIP=
+GUARD_MIN_WSREP_CLUSTER_SIZE=0
+GUARD_MAX_GEN_CPU_PCT=90
+ZABBIX_GEN_AGENT=
+```
+
+   `GUARD_MIN_WSREP_CLUSTER_SIZE=0` porque o MySQL da VM-B é um nó só, sem PXC; com MySQL
+   comum, `wsrep_*` vem vazio e os guards de cluster não disparam.
+
+2. Senha do event socket da VM-B em `/etc/flux-loadtest/fs_cli.pass` (0600), chaves com
+   `keys setup --via <admin> --write-config` e `check`.
+
+### 20.4 Execução e correção encontrada
+
+| Passo | Comando | Resultado |
+|---|---|---|
+| Uma chamada | `smoke --media none` | ok |
+| Piloto e 5 CPS (1ª tentativa) | `run ...` | **falha** logo após "snapshots pre salvos": `falha na linha 518: [[ -n ${CFG[DB_VIP]} ]]` |
+
+Causa: no `collector_args`, `[[ -n ${CFG[DB_VIP]} ]] && COLL_ARGS+=(...)` era o último comando
+do ramo `db`. Com `DB_VIP` vazio, a função retornava 1 e o `set -e` encerrava o `run` antes dos
+coletores. O mesmo valia para o ramo `web` sem `FPM_STATUS_URL`. O `smoke` não sobe coletores,
+por isso funcionava. Corrigido com `if` nas três condições (`fix(coletor)`); a correção foi
+aplicada na VM-A e os testes abaixo rodaram com ela.
+
+Comandos dos testes (na VM-A):
+
+```bash
+./flux-loadtest.sh run -c /etc/flux-loadtest/loadtest.conf --confirm-prod -y -t sip -r 1 -H 10 -w 60 -M none --label vm-piloto
+```
+
+```bash
+./flux-loadtest.sh run -c /etc/flux-loadtest/loadtest.conf --confirm-prod -y -t sip -r 5 --cps-start 1 --ramp-step 1 -H 20 -w 180 --label vm-cps5
+```
+
+### 20.5 Resultados
+
+| | `vm-piloto` (1 CPS, sem mídia, 60 s) | `vm-cps5` (alvo 5 CPS, RTP, 180 s) |
+|---|---|---|
+| Chamadas | 60 de 60, 0 falhas | 99 de 99, 0 falhas |
+| Atendedor | 60 recebidas e encerradas | 99 recebidas e encerradas |
+| CPS real (pico) | 1,2 | 4,0 (rampa interrompida aos 41 s) |
+| Simultâneas (pico) | 13 | 78 |
+| INVITE -> 100 / 200 (média) | 10 ms / 155 ms | **2,7 s / 11,2 s** |
+| CPU da VM-B (média/pico) | 19% / 31% | 54% / **86%** |
+| `freeswitch_cpu_pct` (média/pico; 100 = 1 núcleo) | 30 / 52 | 142 / 327 |
+| `mysqld_cpu_pct` (média/pico) | 19 / 30 | 44 / 75 |
+| `fs_idle_cpu` mínimo | 74,6 | 9,6 |
+| `db_qps` (média/pico) | 341 / 413 | 399 / 913 |
+| `udp_rcvbuf_err_s` na VM-B (média/pico, drenagem) | 0 / 0 | 46 / 186 |
+| CPU do SIPp na VM-A (pico) | 10% de um núcleo | 86% de um núcleo; watchdog do atendedor |
+| Guard | nenhum limite | **interrompido**: `fs1:cpu=85.5 por 3 amostras seguidas` |
+
+Leitura:
+
+- **Capacidade desta VM-B com RTP: ~3 a 4 CPS (~80 simultâneas).** Acima disso, as chamadas
+  ainda completam, mas o FreeSWITCH satura: o 100 Trying chega em segundos e o 200 OK em ~11 s
+  (duração média de 33 s para um hold de 20 s). O guard parou a carga como esperado.
+- `fs1` e `db1` são a mesma VM: as métricas de sistema (CPU, rede, disco) se repetem; as de
+  serviço (`fs_*`, `db_*`) são separadas.
+- **Banco:** no piloto, ~340 consultas/s com ~9 chamadas ativas (baseline: 13/s), cerca de 15
+  SELECT e 8 UPDATE por segundo por chamada ativa. A origem ainda não foi identificada
+  (`performance_schema.events_statements_summary_by_digest` depois de um piloto).
+- `udp_rcvbuf_err_s` na VM-B indica RTP descartado no kernel: buffers UDP padrão. Na VM-A o
+  valor alto é esperado (seção 17).
+- A VM-A com 2 vCPU chegou perto do limite do SIPp com RTP a 4 CPS; para mais, 4 vCPU.
+
+Próximos testes sugeridos: buffers UDP na VM-B (os mesmos do papel `gen`), 5 CPS sem mídia
+(`-M none`, separa sinalização/banco do RTP), 3 CPS com RTP (regime estável) e o levantamento
+das consultas do banco.
+
+### 20.6 Importação no Zabbix
+
+As duas execuções foram importadas com os timestamps originais (seção 19), a partir da VM-A:
+
+1. `loadtest.conf`: `ZABBIX_SERVER`, `ZABBIX_PORT=10051`, `ZABBIX_HOST_PREFIX=lab-` (separa dos
+   hosts `flt-` de produção), `ZABBIX_LIVE=1`, `ZABBIX_API_URL` e `ZABBIX_API_TOKEN_FILE` (0600).
+2. Templates e hosts (`lab-fs1`, `lab-db1`, `lab-gen`, `lab-run`), com o mesmo `loadtest.conf`
+   dos testes, para os ids baterem com os dos resultados:
+
+```bash
+./flux-loadtest.sh zabbix setup --import-template -c /etc/flux-loadtest/loadtest.conf
+```
+
+```bash
+./flux-loadtest.sh zabbix check -c /etc/flux-loadtest/loadtest.conf
+```
+
+3. Envio de cada execução, primeiro com `--dry-run`:
+
+```bash
+./flux-loadtest.sh zabbix send /var/lib/flux-loadtest/results/20261017-013611-vm-piloto -c /etc/flux-loadtest/loadtest.conf
+```
+
+```bash
+./flux-loadtest.sh zabbix send /var/lib/flux-loadtest/results/20261017-030154-vm-cps5 -c /etc/flux-loadtest/loadtest.conf
+```
+
+Cada diretório recebe o marcador `zabbix.sent`; um segundo envio é recusado (só `--force` se
+o `zabbix.log` mostrar que os valores não chegaram). Os dados aparecem em Monitoramento >
+Últimos dados (host group "Flux Loadtest") e nos gráficos com o período do teste; o `vm-cps5`
+gera os problemas "Teste de carga interrompido" e "CPU acima de 85%". Com `ZABBIX_LIVE=1`, as
+próximas execuções vão ao vivo, sem importação.
+
+### 20.7 Reversão na VM-B
+
+```bash
+mysql flux < /opt/flux-loadtest/deploy/stfc-fs02/sql/90-acl-lb-restore.sql && fs_cli -x reloadacl
+```
+
+`95-dids-remove.sql` até `removidos = 0`, e na VM-A `./flux-loadtest.sh keys revoke`.
