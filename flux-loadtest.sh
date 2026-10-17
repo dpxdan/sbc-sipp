@@ -281,12 +281,14 @@ collector_args() {
     case "${role}" in
         opensips) COLL_ARGS+=(--procs opensips --disk / --cmd "${CFG[OPENSIPS_MI_CMD]}") ;;
         fs)       COLL_ARGS+=(--procs freeswitch --disk "${CFG[FS_DISK_PATH]}" --cmd "${CFG[FS_CLI_CMD]}") ;;
+        # if em vez de "[[ ]] &&": com o valor vazio, a lista retornaria 1 e, sendo o ultimo
+        # comando da funcao, o set -e encerraria o run (MySQL sem VIP, web sem fpm-status)
         db)       COLL_ARGS+=(--procs mysqld --disk "${CFG[MYSQL_DISK_PATH]}" --cmd "${CFG[MYSQL_CLI_CMD]}")
-                  [[ -n ${CFG[DB_VIP]} ]] && COLL_ARGS+=(--vip "${CFG[DB_VIP]}")
+                  if [[ -n ${CFG[DB_VIP]} ]]; then COLL_ARGS+=(--vip "${CFG[DB_VIP]}"); fi
                   ;;
         web)      COLL_ARGS+=(--procs "${CFG[WEB_PROCS]}" --disk /)
-                  [[ -n ${CFG[NGINX_STATUS_URL]} ]] && COLL_ARGS+=(--nginx-url "${CFG[NGINX_STATUS_URL]}")
-                  [[ -n ${CFG[FPM_STATUS_URL]} ]] && COLL_ARGS+=(--fpm-url "${CFG[FPM_STATUS_URL]}")
+                  if [[ -n ${CFG[NGINX_STATUS_URL]} ]]; then COLL_ARGS+=(--nginx-url "${CFG[NGINX_STATUS_URL]}"); fi
+                  if [[ -n ${CFG[FPM_STATUS_URL]} ]]; then COLL_ARGS+=(--fpm-url "${CFG[FPM_STATUS_URL]}"); fi
                   ;;
         gen)      COLL_ARGS+=(--procs "sipp,wrk,sysbench" --disk "${CFG[RESULTS_DIR]}") ;;
     esac
