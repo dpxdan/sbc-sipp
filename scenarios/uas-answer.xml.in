@@ -16,6 +16,11 @@
 
   O BYE normalmente vem do FS quando o UAC encerra (fim do hold). Nao ha [field]: o
   DID chamado e o numero de A chegam no INVITE.
+
+  Record-Route: em producao o FS envia o bridge pelo OpenSIPS, que faz record_route. O 180
+  e o 200 devolvem o Record-Route recebido (RFC 3261 12.1.1); sem isso o FS fica sem route
+  set e o ACK e o BYE da perna B nao chegam aqui. Sem Record-Route no INVITE (FS direto,
+  lab Docker) a linha fica vazia e o SIPp a descarta.
 -->
 <scenario name="WEB-1437 UAS DIRECT-IP">
 
@@ -44,6 +49,7 @@
       [last_To:];tag=[pid]UAS[call_number]
       [last_Call-ID:]
       [last_CSeq:]
+      [last_Record-Route:]
       Contact: <sip:[service]@[local_ip]:[local_port];transport=[transport]>
       Content-Length: 0
 
@@ -59,6 +65,7 @@
       [last_To:];tag=[pid]UAS[call_number]
       [last_Call-ID:]
       [last_CSeq:]
+      [last_Record-Route:]
       Contact: <sip:[service]@[local_ip]:[local_port];transport=[transport]>
       Allow: INVITE, ACK, BYE, CANCEL, OPTIONS
       User-Agent: flux-loadtest-uas
