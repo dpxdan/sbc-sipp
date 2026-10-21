@@ -34,7 +34,10 @@ if [[ -n ${st} ]]; then
     ok "fs_cli responde (root)"
     printf '%s\n' "${st}" | grep -E 'session\(s\)' | sed 's/^/        /'
 else
-    fail "fs_cli sem resposta como root (/root/.fs_cli_conf com a senha do event socket)"
+    fail "fs_cli sem resposta como root: crie /root/.fs_cli_conf (README, secao 2.1)"
+    es=/etc/freeswitch/autoload_configs/event_socket.conf.xml
+    # so IP e porta; a senha nao e exibida
+    [[ -r ${es} ]] && grep -oE 'name="(listen-ip|listen-port)" value="[^"]*"' "${es}" | sed 's/^/        event_socket: /'
 fi
 sps=$(fsx 'fsctl sps' | grep -oE '[0-9]+' | tail -n 1)
 max=$(fsx 'fsctl max_sessions' | grep -oE '[0-9]+' | tail -n 1)

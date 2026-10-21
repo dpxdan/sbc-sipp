@@ -99,7 +99,8 @@ fi
 if command -v iptables >/dev/null 2>&1; then
     iptables -S INPUT 2>/dev/null | grep -E -- "-P INPUT|$(cfg UAS_PORT)" | sed 's/^/        /' | head -10
 fi
-warn "com politica drop: liberar de ${target} e de ${FS_LIST}: $(cfg SIP_LOCAL_PORT)/udp, $(cfg UAS_PORT)/udp e o RTP a partir de $(cfg RTP_PORT_BASE)/udp (originador) e $(cfg UAS_RTP_PORT_BASE)/udp (atendedor), 2 portas por chamada simultanea em cada faixa"
+srcs=$(printf '%s\n' "${target}" ${FS_LIST} | awk 'NF && !seen[$0]++' | paste -sd ' ' -)
+warn "com politica drop: liberar de ${srcs}: $(cfg SIP_LOCAL_PORT)/udp, $(cfg UAS_PORT)/udp e o RTP a partir de $(cfg RTP_PORT_BASE)/udp (originador) e $(cfg UAS_RTP_PORT_BASE)/udp (atendedor), 2 portas por chamada simultanea em cada faixa"
 
 printf '\n'
 ((FAIL == 0)) && { echo "preflight .165: sem falhas"; exit 0; }

@@ -12,6 +12,8 @@
 #     Nao persistem: um restart do FreeSWITCH volta aos valores do switch.conf.
 #   - Limites maiores deixam o FS aceitar mais chamadas (do teste e reais); se o servidor
 #     saturar, chamadas reais podem degradar. O guard do flux-loadtest para a carga antes.
+#   - "aplicar" nunca reduz um limite: usa o maior entre o pedido e o atual (ex.: o .163 ja
+#     tem sps=300 no switch.conf; pedir 150 mantem 300).
 #   - "aplicar" grava os valores atuais em /root/flux-loadtest-fs-limites.antes (uma vez);
 #     "restaurar" volta a eles e apaga o arquivo.
 
@@ -56,6 +58,15 @@ aplicar() {
     if [[ ! -f ${SAVE} ]]; then
         (umask 077 && printf 'sps=%s\nmax_sessions=%s\n' "${cur_sps}" "${cur_max}" > "${SAVE}")
         printf 'originais guardados em %s: sps=%s max_sessions=%s\n' "${SAVE}" "${cur_sps}" "${cur_max}"
+    fi
+    # nunca reduz: o trafego real pode depender do valor atual
+    if ((sps < cur_sps)); then
+        printf 'sps pedido (%s) menor que o atual (%s): mantido %s\n' "${sps}" "${cur_sps}" "${cur_sps}"
+        sps=${cur_sps}
+    fi
+    if ((max < cur_max)); then
+        printf 'max_sessions pedido (%s) menor que o atual (%s): mantido %s\n' "${max}" "${cur_max}" "${cur_max}"
+        max=${cur_max}
     fi
     fsx "fsctl sps ${sps}" >/dev/null || die "fsctl sps ${sps} falhou"
     fsx "fsctl max_sessions ${max}" >/dev/null || die "fsctl max_sessions ${max} falhou"

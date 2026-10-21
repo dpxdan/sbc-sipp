@@ -4,6 +4,10 @@
 -- Parametros (opcional, pela linha de comando):
 --   { echo "SET @conta = 123;"; cat 00-verificacao.sql; } | mysql flux
 
+-- Collation: as tabelas do Flux usam utf8mb4_general_ci/utf8_general_ci e o padrao do MySQL
+-- 8.4 (utf8mb4_0900_ai_ci) faria as variaveis abaixo falharem com "Illegal mix of collations".
+SET NAMES utf8mb4 COLLATE utf8mb4_general_ci;
+
 SET @conta   = IFNULL(@conta, 0);                 -- accounts.id da conta de teste
 SET @inicio  = IFNULL(@inicio, CURDATE());          -- inicio da janela dos CDRs (padrao: hoje)
 SET @gerador = '200.159.177.165';
