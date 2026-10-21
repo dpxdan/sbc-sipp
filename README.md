@@ -109,6 +109,7 @@ Consequências para o teste:
 | `bin/flux-loadtest-zbx` | Disparo de perfis pelo Zabbix: chamado pelo zabbix-agentd do servidor de testes (seção 19.6) |
 | `profiles/*.conf.example` | Perfis de teste para o disparo pelo Zabbix |
 | `deploy/stfc-fs02/` | Runbook e arquivos do primeiro teste em produção: gerador no `sbc-stfc-interfaceweb` (.165), carga direta no FreeSWITCH do `sbc-stfc-02` (.162) |
+| `deploy/stfc-completo/` | Runbook do teste completo da WEB-1437 em produção: gerador no .165 como operadora no OpenSIPS (.163), `load_balancer` para os dois FS, 100/200/300 CPS e 1000/2000/3000 simultâneas, limites do FS ajustados em runtime |
 | `lab/vm/` | O mesmo laboratório em 6 VMs Debian 12, sem Docker: o `vmlab.sh` roda no servidor de testes e configura as outras 5 VMs por SSH, com systemd (veja `lab/vm/README.md`) |
 | `install/` | Instalador local por papel (`freeswitch`, `opensips`, `mysql`, `web`, `gen`): `flux-host.sh lab` instala o laboratório no próprio servidor; `flux-host.sh prepare` só prepara servidores existentes (STFC) para o teste (veja `install/README.md`) |
 
