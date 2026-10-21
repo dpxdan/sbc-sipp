@@ -49,9 +49,18 @@ Arquivos deste diretório:
 | Carga SIP | todos | **Tráfego real no mesmo OpenSIPS, FS e banco; a interface web divide CPU com o gerador** | Guard, degraus, Ctrl+C (parada suave) |
 
 **Limites do FreeSWITCH:**
-- **Hoje:** o `switch.conf` do Flux usa `sessions-per-second=30` e `max-sessions=1000` por FS.
-- **Por que não cabem os cenários:** cada chamada de teste abre **2 sessões** (entrada mais bridge para o atendedor). Com os limites atuais, o teto dos dois nós somados é de ~30 CPS e ~1000 chamadas, divididos com o tráfego real. Acima disso, o FS responde 503, **inclusive para as chamadas de clientes**.
-- **Na janela:** o `fs-limites.sh` sobe os limites em runtime, por degrau (seção 6), sem restart e sem alterar o `switch.conf`.
+- **Hoje (preflight de 21/10/2026, `switch.conf`):**
+
+  | FS | `max-sessions` | `sessions-per-second` |
+  |---|---|---|
+  | `.163` | 2000 | 300 |
+  | `.162` | 2000 | 50 |
+- **Por que não cabem os cenários:** cada chamada de teste abre **2 sessões** (entrada mais bridge para o atendedor).
+  - O `.162` aguenta ~25 CPS de teste.
+  - Os dois nós juntos aguentam ~2000 chamadas simultâneas.
+  - Isso tudo é dividido com o tráfego real.
+  - Acima disso, o FS responde 503, **inclusive para as chamadas de clientes**.
+- **Na janela:** o `fs-limites.sh` sobe os limites em runtime, por degrau (seção 6), sem restart e sem alterar o `switch.conf`. Ele nunca reduz um limite: no `.163`, o `sps` 300 fica como está.
 
 Faça o teste em horário de menor tráfego, com o responsável pelo ambiente e o NOC
 acompanhando.
@@ -100,7 +109,8 @@ read -r -s -p "Senha do event socket dos FS: " p && printf '%s\n' "$p" > /etc/fl
 
 ### 1.3 Firewall do .165
 
-Com política `drop` na entrada, libere **vindo de 200.159.177.163 e 200.159.177.162**:
+No preflight de 21/10/2026 o .165 está com `-P INPUT ACCEPT`: nada a liberar. Se a política
+for `drop`, libere **vindo de 200.159.177.163 e 200.159.177.162**:
 
 | Porta | Uso |
 |---|---|
@@ -137,6 +147,22 @@ Anote, de cada FS, os limites atuais e o pico de sessões e de sessões por segu
 real (linhas `session(s)`). Eles definem a margem da seção 6. No .163 o preflight também
 mostra a `address` carregada, o `lb_list` e a memória do OpenSIPS.
 
+O preflight e o `fs-limites.sh` usam o `fs_cli` como root. Se ele não responder ("fs_cli sem
+resposta"), crie o `/root/.fs_cli_conf` com a senha do event socket. O preflight mostra o
+`listen-ip`; se não for `127.0.0.1`/`::`, inclua `host => <listen-ip>`:
+
+```bash
+install -m 0600 /dev/null /root/.fs_cli_conf
+```
+
+```bash
+read -r -s -p "Senha do event socket: " p && printf '[default]\npassword => %s\n' "$p" > /root/.fs_cli_conf && unset p
+```
+
+```bash
+fs_cli -x status | head -3
+```
+
 ### 2.2 Usuário de coleta
 
 No .163 (FreeSWITCH e OpenSIPS):
@@ -167,10 +193,35 @@ O `prepare` cria o usuário `loadtest` (sem senha; o acesso é pela chave do pas
 
 - **fail2ban do .163:** `200.159.177.165` em `ignoreip` do jail do SIP.
 - **Event Guard do Flux:** whitelist do `200.159.177.165` pela interface. Sem isso, o volume de INVITE pode banir o gerador no meio do degrau.
-- **Firewall do .163:** entrada de `200.159.177.165` em `5060/udp`.
-- **Firewall dos dois FS:**
-  - entrada de `200.159.177.165` na faixa de RTP do FS (mostrada pelo preflight);
-  - saída para o .165 nas portas da tabela 1.3.
+- **Firewall dos dois SBC:** no preflight de 21/10/2026, os dois estão com `-P INPUT DROP` (o .163 também mostra `policy drop` no nftables).
+  - **O que o .165 precisa alcançar:**
+    - no .163: SIP no OpenSIPS (`5060/udp`);
+    - nos dois FS: as respostas do atendedor ao bridge e o RTP do originador e do atendedor (faixa `16384-32768/udp` do `switch.conf`).
+  - **A saída** (`-P OUTPUT ACCEPT`) já está liberada.
+
+  Antes, veja se o iptables é o `nf_tables` e se há tabelas nativas do nftables além das do iptables (somente leitura):
+
+  ```bash
+  iptables -V
+  ```
+
+  ```bash
+  nft list tables
+  ```
+
+  Se só houver as tabelas do iptables (`ip filter`, `ip6 filter`), uma regra temporária, sem persistir, por SBC. Ela libera todo UDP vindo do .165, marcada para a remoção:
+
+  ```bash
+  iptables -I INPUT -s 200.159.177.165/32 -p udp -m comment --comment flux-loadtest -j ACCEPT
+  ```
+
+  Se houver uma tabela nativa (ex.: `inet filter`) com `policy drop`, a regra também precisa existir nela. Nesse caso, me mande a saída do `nft list ruleset` antes de alterar.
+
+  Remoção (seção 8):
+
+  ```bash
+  iptables -D INPUT -s 200.159.177.165/32 -p udp -m comment --comment flux-loadtest -j ACCEPT
+  ```
 
 ---
 
@@ -328,7 +379,8 @@ Bloco 6: `ANSWER`, débito e custo **zero**. Se houver débito, pare: a conta te
 
 Antes de cada degrau, ajuste os limites **nos dois FS** com os valores da tabela. Eles são por
 nó, considerando o `load_balancer` dividindo a carga ao meio e as 2 sessões por chamada, mais uma
-margem para o tráfego real. A margem precisa ser de pelo menos 2 vezes o pico real anotado no 2.1:
+margem para o tráfego real. O script mantém o valor atual quando ele já é maior (`sps` 300 e
+`max-sessions` 2000 no .163; `max-sessions` 2000 no .162). A margem precisa ser de pelo menos 2 vezes o pico real anotado no 2.1:
 50 sessões por segundo e 500 sessões na tabela; aumente se o pico real for maior.
 
 | # | Degrau | Comando (`run ... -c /etc/flux-loadtest/loadtest.conf --confirm-prod -t sip`) | `fs-limites.sh aplicar` |

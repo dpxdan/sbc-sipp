@@ -18,6 +18,10 @@
 -- os lotes um por vez). Cada chamada do teste gera CDR na conta de teste. Reversao:
 -- 95-dids-remove.sql.
 
+-- Collation: as tabelas do Flux usam utf8mb4_general_ci/utf8_general_ci e o padrao do MySQL
+-- 8.4 (utf8mb4_0900_ai_ci) faria as variaveis abaixo falharem com "Illegal mix of collations".
+SET NAMES utf8mb4 COLLATE utf8mb4_general_ci;
+
 SET @conta   = IFNULL(@conta, 0);
 SET @inicio  = IFNULL(@inicio, 1);
 SET @lote    = LEAST(IFNULL(@lote, 10000), 10000);   -- comece com @lote = 10 para validar

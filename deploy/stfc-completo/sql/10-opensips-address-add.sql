@@ -14,6 +14,10 @@
 --   opensips-cli -x mi address_reload
 --   opensips-cli -x mi address_dump        (grupo 10 com 200.159.177.165)
 
+-- Collation: as tabelas do Flux usam utf8mb4_general_ci/utf8_general_ci e o padrao do MySQL
+-- 8.4 (utf8mb4_0900_ai_ci) faria as variaveis abaixo falharem com "Illegal mix of collations".
+SET NAMES utf8mb4 COLLATE utf8mb4_general_ci;
+
 SET @gerador = '200.159.177.165';
 
 SELECT id, grp, ip, mask, port, proto, context_info FROM address WHERE ip = @gerador;
