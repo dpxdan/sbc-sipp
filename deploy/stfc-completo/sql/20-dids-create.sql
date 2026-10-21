@@ -33,12 +33,28 @@ SET SESSION cte_max_recursion_depth = 20000;
 -- a lista de colunas da dids passa do limite padrao do GROUP_CONCAT (1024 caracteres)
 SET SESSION group_concat_max_len = 65535;
 
+-- Desempenho: dids.number e utf8 (utf8mb3) e as variaveis sao utf8mb4; comparar os dois
+-- converte a coluna e ignora o indice de number (varredura da tabela por numero gerado).
+-- Por isso o modelo e lido pelo id e os numeros existentes vao para uma tabela temporaria
+-- indexada, carregada pelo indice de accountid (inteiro).
+
 -- Conferencia: o modelo precisa existir na conta de teste, DIRECT-IP para o atendedor
-SELECT COUNT(*) INTO @modelo_ok FROM dids
- WHERE number = @modelo AND accountid = @conta AND @conta > 0 AND call_type = 2 AND extensions = @destino;
+SET @modelo_id = NULL;
+SELECT id INTO @modelo_id FROM dids
+ WHERE accountid = @conta AND @conta > 0 AND number = @modelo AND call_type = 2 AND extensions = @destino
+ LIMIT 1;
+SET @modelo_ok = (@modelo_id IS NOT NULL);
+
+DROP TEMPORARY TABLE IF EXISTS flt_dids_existentes;
+CREATE TEMPORARY TABLE flt_dids_existentes (
+  number VARCHAR(40) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL PRIMARY KEY
+) ENGINE=InnoDB;
+INSERT IGNORE INTO flt_dids_existentes (number)
+SELECT number FROM dids WHERE accountid = @conta AND @conta > 0;
+
 SELECT @conta AS conta, @inicio AS inicio, LEAST(@inicio + @lote - 1, @maximo) AS fim,
-       @modelo_ok AS modelo_ok,
-       (SELECT COUNT(*) FROM dids WHERE number LIKE CONCAT(@prefixo, '%')) AS faixa_antes;
+       @modelo_ok AS modelo_ok, @modelo_id AS modelo_id,
+       (SELECT COUNT(*) FROM flt_dids_existentes) AS dids_da_conta_antes;
 
 -- Colunas do modelo (exceto id e number), lidas do schema em uso
 SELECT GROUP_CONCAT(CONCAT('`', column_name, '`') ORDER BY ordinal_position),
@@ -48,20 +64,21 @@ SELECT GROUP_CONCAT(CONCAT('`', column_name, '`') ORDER BY ordinal_position),
  WHERE table_schema = DATABASE() AND table_name = 'dids' AND column_name NOT IN ('id', 'number');
 
 -- Sem modelo valido (@modelo_ok = 0) o SELECT nao retorna linhas e nada e inserido.
--- Numeros ja existentes sao pulados (NOT EXISTS), entao repetir um lote nao duplica.
+-- Numeros ja existentes na conta sao pulados, entao repetir um lote nao duplica.
 SET @sql = CONCAT(
   'INSERT INTO dids (`number`, ', @cols, ') ',
   'WITH RECURSIVE seq (n) AS (SELECT 0 UNION ALL SELECT n + 1 FROM seq WHERE n < ', @lote - 1, ') ',
   'SELECT CONCAT(@prefixo, LPAD(seq.n + @inicio, 6, ''0'')), ', @cols_d, ' ',
-  'FROM seq CROSS JOIN dids d ',
-  'WHERE d.number = @modelo AND d.accountid = @conta AND @modelo_ok = 1 ',
-  '  AND seq.n + @inicio <= @maximo ',
-  '  AND NOT EXISTS (SELECT 1 FROM dids x WHERE x.number = CONCAT(@prefixo, LPAD(seq.n + @inicio, 6, ''0'')))');
+  'FROM seq CROSS JOIN (SELECT * FROM dids WHERE id = @modelo_id) d ',
+  'WHERE @modelo_ok = 1 AND seq.n + @inicio <= @maximo ',
+  '  AND NOT EXISTS (SELECT 1 FROM flt_dids_existentes x ',
+  '                   WHERE x.number = CONCAT(@prefixo, LPAD(seq.n + @inicio, 6, ''0'')))');
 PREPARE ins FROM @sql;
 EXECUTE ins;
 SELECT ROW_COUNT() AS inseridos;
 DEALLOCATE PREPARE ins;
+DROP TEMPORARY TABLE IF EXISTS flt_dids_existentes;
 
 SELECT accountid, call_type, extensions, COUNT(*) AS dids_na_faixa
-  FROM dids WHERE number LIKE CONCAT(@prefixo, '%')
+  FROM dids WHERE accountid = @conta AND number LIKE CONCAT(@prefixo, '%')
  GROUP BY accountid, call_type, extensions;
