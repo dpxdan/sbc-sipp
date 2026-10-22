@@ -4,6 +4,10 @@ Campanha nos servidores de produção, com tráfego real, seguindo o runbook des
 (`README.md`). Todas as metas da issue foram executadas ou avaliadas até o fim da janela
 (23:51), com a configuração de produção (limites do FS inalterados).
 
+Em 22/10/2026 os resultados foram levados ao Zabbix de produção (dashboard, envio ao vivo e
+disparo de perfis pelo menu, seção 7) e foi criado o script de limpeza dos DIDs de teste
+(`dids-limpar.sh`).
+
 ## Resumo
 
 ### Resultado por meta
@@ -74,11 +78,14 @@ Ferramentas:
 | `/root/.fs_cli_conf` (senha do event socket, 0600) | .163, .162 | Pode ficar (uso do root); remover se não for desejado |
 | Regra `iptables -I INPUT -s 200.159.177.165/32 -p udp ... flux-loadtest -j ACCEPT` (não persistente) | .162 (confirmar no .163) | `iptables -D INPUT -s 200.159.177.165/32 -p udp -m comment --comment flux-loadtest -j ACCEPT` |
 | `address` id 19: grupo 10, `200.159.177.165`, `context_info='flux-loadtest'` | Banco + `address_reload` no .163 | `sql/90-opensips-address-remove.sql` + `address_reload` |
-| Conta 211 e 100.000 DIDs `5500000xxxxxx` | Banco | `sql/95-dids-remove.sql` (clones, em lotes); modelo e conta pela interface (o produto 83673 sai junto) |
+| Conta 211 e 100.000 DIDs `5500000xxxxxx` | Banco | `dids-limpar.sh contar` e `remover --conta 211` no .161 (99.999 clones, em lotes); DID modelo e conta pela interface (o produto 83673 sai junto) |
 | Pacotes do gerador, `/etc/sysctl.d/90-flux-loadtest.conf`, `/etc/security/limits.d/90-flux-loadtest.conf` | .165 | Podem ficar; `apt purge sip-tester wrk sysbench` e remover os dois arquivos se não forem mais usados |
 | Capturas SIP: `/root/smoke-sip*.pcap`, `/root/degrau-cps25*.pcap` (.165); `/root/sip-163*.pcap` (.163) | .165, .163 | Apagar depois da análise (contêm DIDs e cabeçalhos SIP) |
 | Arquivos de diagnóstico `/root/net-*`, `/root/nstat-*`, `/root/rede-*`, `/root/fs-db-*`, `/root/tcpdump-*` | .163, .162; `/root/db-origens.txt` no .161 | Apagar |
 | `fs-limites.sh` | — | **Não aplicado**: os limites do FS estão como no `switch.conf` |
+| `ZABBIX_*` no `loadtest.conf` e `/etc/flux-loadtest/zabbix_api.token` | .165 | Esvaziar `ZABBIX_SERVER` (para o envio ao vivo); revogar o token e apagar o arquivo |
+| Include `/etc/zabbix/zabbix_agentd.conf.d/flux-loadtest.conf`, `/usr/local/sbin/flux-loadtest-zbx`, `/etc/sudoers.d/flux-loadtest-zbx`, perfis em `/etc/flux-loadtest/profiles.d/` | .165 | Remover os quatro e reiniciar o `zabbix-agent` (que já existia e fica). Backup: `/var/backups/flux-loadtest/20261022-024752` |
+| Hosts `flt-*`, dashboard, scripts do menu `Flux Loadtest` e manutenção `Flux Loadtest - sem alertas ao suporte` | Zabbix de produção | `ZABBIX.md`, seção Reversão |
 
 ## 3. Execuções
 
@@ -309,8 +316,38 @@ campanha nos dois FS e atualizar a tabela `load_balancer` (`lb_reload`), na mesm
 | #8 | Atendedor devolve o `Record-Route` no 180 e no 200 |
 | #9 | Criação de DIDs pelos índices (chave primária e `accountid`) |
 | #10 | `pdd-pcap.py` |
+| #11 | Este documento |
+| #12 | Dashboard de resultados no Zabbix, execução e INVITE -> 200 no resultado de cada execução, `ZABBIX.md` e perfis do STFC |
+| #13 | Include do `zabbix-agent` no diretório do `Include=` do agent (pacote do Debian) |
+| #14 | Auditoria do agent sem abortar quando um include não tem a chave (`pipefail`) |
+| #15 | Validação do agent sem `-T` (agent 6.0) |
+| #16 | `dids-limpar.sh`, `95-dids-remove.sql` apontando para ele e sem varrer a tabela, documentação da integração com o Zabbix |
 
-## 7. Pendências e decisões
+## 7. Integração com o Zabbix (22/10/2026)
+
+Detalhes e reversão em `ZABBIX.md`.
+
+| Item | Estado |
+|---|---|
+| Dashboard | `Flux Loadtest - Resultados (flt-)` no `zabbixnew.flux.net.br` (7.2.3): tabela com uma linha por execução, gráficos SIP e uma página por servidor |
+| Execuções | As 9 de 21/10/2026 importadas, iguais aos `report.txt`. A `stfc-cps25-rede2` (degrau de 25 CPS por 240 s) entrou com 4546 chamadas, 0% de falha, INVITE -> 200 médio de 2659 ms e pico de 720 simultâneas: o teto do gerador (`25 x (20 + 4) x 1,2`), atingido porque o atraso do .162 (A1) acumulou chamadas |
+| Envio ao vivo | Ativo: todo `run` do .165 aparece no dashboard |
+| Disparo pelo menu | Host `flt-gen`, perfis `stfc-piloto`, `stfc-cps20` e `stfc-c1000`, restrito a `Zabbix administrators`. Primeiro uso: `stfc-cps20` em 22/10 02:57, parado pelo operador (código 6) |
+| Alertas | Manutenção com coleta de dados nos hosts `flt-*` por 180 dias: nenhum problema do teste chega ao suporte |
+| Testes antes da produção | Zabbix 7.2.3 local e uma VM de teste (Zabbix 7.0.32, com o template gerado por `gen_templates.py --version 7.0`) |
+
+Achados:
+
+- **A17. Ações de notificação sem condição.** As 5 ações do Zabbix de produção (e-mail e
+  Telegram) valem para qualquer gatilho. Sem a manutenção, os gatilhos do guard chegariam ao
+  suporte durante um teste. Definitivo: condição "tag `scope` diferente de `loadtest`".
+- **A18. Templates do flux-loadtest em hosts reais.** `FreeSWITCH` e `OpenSIPS` em
+  `SBC-STFC-162`/`SBC-STFC-163`; `Gerador` e `Execucao` em `SBC-STFC-INTERFACEWEB`. Não recebem
+  dados nesses hosts: desvincular.
+- **A19. Agent 6.0 do Debian no .165.** Diretório de include diferente do pacote oficial e sem
+  `zabbix_agentd -T`: corrigidos no `prepare` (#13 a #15).
+
+## 8. Pendências e decisões
 
 1. **A1 (próxima janela):** degrau de 25 CPS por 240 s com `fs-limites.sh aplicar 300 2000` no .162 e captura no .163. Se não resolver, banco interno do .162 em memória ou no MySQL (restart do FS).
 2. **A15:** `lb_list` e log do OpenSIPS durante um degrau acima de 25 CPS.
@@ -321,4 +358,5 @@ campanha nos dois FS e atualizar a tabela `load_balancer` (`lb_reload`), na mesm
    - nível de log do Lua (A7).
 5. **Senha do event socket:** trocar nos dois FS e atualizar o `load_balancer` (A11).
 6. **Banco:** investigar as ~240 consultas por chamada (A2) e o `mail_details` (A16).
-7. **Ao fim da campanha:** reversão da seção 2 e da seção 8 do `README.md`.
+7. **Zabbix:** desvincular os templates dos hosts reais (A18); decidir a condição de tag nas ações (A17) antes do fim da manutenção (20/04/2027); revogar os tokens de API usados nos testes.
+8. **Ao fim da campanha:** reversão da seção 2 e da seção 8 do `README.md`. DIDs: `dids-limpar.sh contar` e `remover --conta 211` no .161; o DID modelo e a conta pela interface.

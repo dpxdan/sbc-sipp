@@ -1,5 +1,9 @@
 -- deploy/stfc-completo/sql/95-dids-remove.sql - ESCRITA NO BANCO DE PRODUCAO (WEB-1437)
 --
+-- Preferir o deploy/stfc-completo/dids-limpar.sh: conta antes, pede confirmacao, remove os
+-- clones em lotes pela chave primaria (sem repetir a mao) e mantem o DID modelo para sair pela
+-- interface com o produto. Este SQL fica como alternativa manual.
+--
 -- Remove os DIDs de teste ao fim da campanha (inclusive o modelo), em lotes de 10.000.
 -- Repita ate "removidos = 0". So apaga a faixa ficticia 5500000xxxxxx da conta de teste,
 -- DIRECT-IP com destino no atendedor do .165.
@@ -28,4 +32,6 @@ DELETE FROM dids
  LIMIT 10000;
 
 SELECT ROW_COUNT() AS removidos;
-SELECT COUNT(*) AS restantes_na_faixa FROM dids WHERE number LIKE CONCAT(@prefixo, '%');
+-- pelo indice de accountid: comparar dids.number (utf8) com variavel utf8mb4 varreria a tabela
+SELECT COUNT(*) AS restantes_na_conta FROM dids
+ WHERE accountid = @conta AND @conta > 0 AND number LIKE CONCAT(@prefixo, '%');
