@@ -22,7 +22,12 @@ readonly PREP_FPM_CONF=${PREP_FPM_POOL_DIR}/zz-flux-loadtest.conf
 readonly PREP_ZBX_BIN=/usr/local/sbin/flux-loadtest-zbx
 readonly PREP_ZBX_SUDOERS=/etc/sudoers.d/flux-loadtest-zbx
 readonly PREP_ZBX_AGENT_CONF=/etc/zabbix/zabbix_agentd.conf
-readonly PREP_ZBX_INCLUDE=/etc/zabbix/zabbix_agentd.d/flux-loadtest.conf
+# Diretorio do include: o do Include= do zabbix_agentd.conf (pacote oficial: zabbix_agentd.d;
+# pacote do Debian: zabbix_agentd.conf.d). Definido por zbx_include_resolve.
+readonly PREP_ZBX_INCLUDE_NAME=flux-loadtest.conf
+readonly PREP_ZBX_INCLUDE_DEFAULT_DIR=/etc/zabbix/zabbix_agentd.d
+PREP_ZBX_INCLUDE_DIR=${PREP_ZBX_INCLUDE_DEFAULT_DIR}
+PREP_ZBX_INCLUDE=${PREP_ZBX_INCLUDE_DIR}/${PREP_ZBX_INCLUDE_NAME}
 readonly PREP_ZBX_PROFILES=/etc/flux-loadtest/profiles.d
 readonly PREP_ZBX_RELEASE=https://repo.zabbix.com/zabbix/7.2/release/debian/pool/main/z/zabbix-release/zabbix-release_latest_7.2+debian12_all.deb
 
@@ -239,10 +244,34 @@ prep_install_agent() {
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends zabbix-agent sudo python3
 }
 
+# Diretorio que o agentd le para o nosso include: o primeiro Include= que seja um diretorio ou
+# DIR/*.conf (o nome flux-loadtest.conf precisa casar). Sem conf (antes de instalar): o padrao do
+# pacote oficial. Retorna 1 se o conf existe e nenhum Include serve.
+zbx_include_resolve() {
+    local inc dir
+    PREP_ZBX_INCLUDE_DIR=${PREP_ZBX_INCLUDE_DEFAULT_DIR}
+    PREP_ZBX_INCLUDE=${PREP_ZBX_INCLUDE_DIR}/${PREP_ZBX_INCLUDE_NAME}
+    [[ -r ${PREP_ZBX_AGENT_CONF} ]] || return 0
+    while IFS= read -r inc; do
+        inc=${inc%$'\r'}
+        inc=${inc%"${inc##*[![:space:]]}"}
+        case "${inc}" in
+            */\*.conf) dir=${inc%/*} ;;
+            */\*) dir=${inc%/*} ;;
+            *) [[ -d ${inc} ]] || continue; dir=${inc%/} ;;
+        esac
+        [[ ${dir} == /* ]] || continue
+        PREP_ZBX_INCLUDE_DIR=${dir}
+        PREP_ZBX_INCLUDE=${dir}/${PREP_ZBX_INCLUDE_NAME}
+        return 0
+    done < <(sed -n 's/^[[:space:]]*Include[[:space:]]*=[[:space:]]*//p' "${PREP_ZBX_AGENT_CONF}")
+    return 1
+}
+
 # Linhas ativas do agentd (conf principal + includes, menos o nosso): PARAMETRO=valor
 zbx_agent_lines() {
     local f
-    for f in "${PREP_ZBX_AGENT_CONF}" /etc/zabbix/zabbix_agentd.d/*.conf; do
+    for f in "${PREP_ZBX_AGENT_CONF}" "${PREP_ZBX_INCLUDE_DIR}"/*.conf; do
         [[ -r ${f} && ${f} != "${PREP_ZBX_INCLUDE}" ]] || continue
         grep -hE "^[[:space:]]*$1=" "${f}" 2>/dev/null | sed 's/^[[:space:]]*//'
     done
@@ -260,9 +289,7 @@ zbx_agent_audit() {
     if zbx_agent_lines EnableRemoteCommands | grep -qE '=1'; then
         warn "o agentd tem EnableRemoteCommands=1 (obsoleto): equivale a liberar qualquer system.run"
     fi
-    if ! zbx_agent_lines Include | grep -q 'zabbix_agentd.d'; then
-        warn "${PREP_ZBX_AGENT_CONF} sem Include de /etc/zabbix/zabbix_agentd.d: o include do flux-loadtest nao seria lido"
-    fi
+    log "agentd: include do flux-loadtest em ${PREP_ZBX_INCLUDE} (Include= do ${PREP_ZBX_AGENT_CONF})"
 }
 
 # Servidor de testes: zabbix-agentd + flux-loadtest-zbx para o disparo pelo Zabbix (README 19.6).
@@ -271,6 +298,7 @@ zbx_agent_audit() {
 prep_zabbix_agent() {
     local src="${REPO_DIR}/bin/flux-loadtest-zbx" conf
     [[ -r ${src} ]] || die "wrapper ausente no repositorio: ${src}"
+    zbx_include_resolve || die "${PREP_ZBX_AGENT_CONF} sem Include= de diretorio (DIR/*.conf): o include do flux-loadtest nao seria lido; acrescente um e repita"
     # estado antes da primeira passada (o plano e a aplicacao decidem igual)
     if [[ -z ${PREP_ZBX_PREEXIST:-} ]]; then
         if dpkg -s zabbix-agent >/dev/null 2>&1; then PREP_ZBX_PREEXIST=1; else PREP_ZBX_PREEXIST=0; fi

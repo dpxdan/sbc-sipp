@@ -112,7 +112,12 @@ Nada muda no comando. Se o Zabbix cair, o teste continua e os valores ficam na f
 - instala o pacote `zabbix-agent` 7.2 do repositório oficial do Zabbix, se faltar, e abre o
   serviço na porta 10050, aceitando só o `Server=` informado;
 - se o .165 já tiver o `zabbix-agent` (servidor já monitorado), o `zabbix_agentd.conf` não é
-  alterado e o `--zabbix-server` é ignorado: só entra o include do flux-loadtest;
+  alterado e o `--zabbix-server` é ignorado: só entra o include do flux-loadtest, no diretório
+  do `Include=` do agent. No .165 (agent 6.0.14 do Debian, `Server=200.159.177.242`):
+  `/etc/zabbix/zabbix_agentd.conf.d/flux-loadtest.conf`, ao lado do
+  `userparameter_fluxsbc.conf`. O `DenyKey=system.run[*]` não muda nada no que existe: o 6.0
+  já bloqueia `system.run` por padrão, e o host não usa `system.run` nem comando remoto;
+- o restart do `zabbix-agent` deixa o .165 alguns segundos sem coleta;
 - instala `/usr/local/sbin/flux-loadtest-zbx`, `/etc/sudoers.d/flux-loadtest-zbx` (o usuário
   `zabbix` roda só esse wrapper) e o include do agent, que libera apenas os comandos exatos de
   cada perfil;
