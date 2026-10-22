@@ -620,7 +620,7 @@ preenchido (seção 19).
 
 | Subcomando | O que faz |
 |---|---|
-| `setup [--import-template]` | Cria o grupo `Flux Loadtest` e um host por servidor da configuração, mais `gen` e `run`, e vincula os templates. `--import-template` importa (ou atualiza) os templates antes |
+| `setup [--import-template]` | Cria o grupo `Flux Loadtest` e um host por servidor da configuração, mais `gen` e `run`, vincula os templates e cria ou atualiza o dashboard de resultados (seção 19.7). `--import-template` importa (ou atualiza) os templates antes |
 | `send <diretório> [--force] [--dry-run]` | Envia uma execução com os timestamps originais. Recusa uma execução já enviada (`zabbix.sent`), porque o Zabbix duplicaria os valores; `--force` reenvia |
 | `check` | Versão da API, hosts com o prefixo e um valor de teste no trapper |
 
@@ -1360,7 +1360,7 @@ Chaves trapper (o template extrai cada métrica do JSON por item dependente):
 | `flt.uas` | Uma linha do `stats.csv` do atendedor: recebidas por segundo, simultâneas, sucesso/falha no período e acumulado, falhas sem BYE, duração |
 | `flt.web` | Resultado do `wrk` por alvo (`static`, `php`, `extra`): req/s, latências p50/p90/p99, erros |
 | `flt.mysql` | Intervalos (`*_now`) e resumo do `sysbench` |
-| `flt.run.info`, `flt.phase`, `flt.guard`, `flt.result` | Parâmetros, fase em andamento, eventos do guard e resultado (`ok`/`interrompido`, totais SIP e do atendedor) |
+| `flt.run.info`, `flt.phase`, `flt.guard`, `flt.result` | Parâmetros, fase em andamento, eventos do guard e resultado (execução, rótulo, `ok`/`interrompido`, totais SIP, INVITE -> 200 médio da execução e totais do atendedor) |
 
 Unidades convertidas no template: MB -> B, Mbps -> bps, kB/s -> B/s.
 
@@ -1484,3 +1484,22 @@ Validado com Zabbix 7.2.3 e zabbix-agent 7.2 em Debian 12 (com um `flux-loadtest
 importação do template, criação idempotente dos scripts, lista de perfis, recusa de valor fora
 da lista, início, recusa de segundo início, parada suave com código 6, LLD e gatilhos. No 7.2,
 script executado no agent tem timeout fixo de 30 s (o `plan` corta em 25 s).
+
+### 19.7 Dashboard de resultados
+
+O `zabbix setup` cria ou atualiza (idempotente) o dashboard global
+**Flux Loadtest - Resultados (`<prefixo>`)**, sem passo extra:
+
+| Página | Widgets |
+|---|---|
+| Resultados | Tabela com uma linha por execução (itens `flt.result[*]` do host `<prefixo>run`: execução, status, criadas, falhas %, pico de simultâneas, pico de CPS, INVITE -> 200 médio, originadas que não chegaram ao atendedor, motivo); gráficos de CPS alvo e realizado, simultâneas, INVITE -> 100/200 e falhas/retransmissões; problemas do grupo `Flux Loadtest` |
+| Servidores | CPU e memória por servidor, sessões e chamadas dos FreeSWITCH, memória compartilhada, diálogos e transações do OpenSIPS, consultas e CPU do MySQL, pacotes recebidos |
+
+- Os gráficos usam padrão de host (`<prefixo>*`, `<prefixo>fs*`...) e de nome de item: hosts novos entram sem refazer o dashboard.
+- A tabela precisa dos itens `flt.result[execucao]`, `[label]` e `[sip_invite_200_ms]`, que vieram com esta versão do template: rode `zabbix setup --import-template` uma vez. Execuções antigas reimportadas com `zabbix send --force` ganham esses campos (calculados do `run.env` e do `sip/stats.csv`).
+- O usuário do token precisa de permissão para criar dashboards. Sem ela, o `setup` cria os hosts e termina com `AVISO: dashboard nao criado` (código 5).
+- Para uma execução antiga, escolha o período dela no seletor de tempo do dashboard.
+
+Validado com Zabbix 7.2.3: criação e atualização do dashboard e importação das 8 execuções
+de 21/10/2026 no STFC, com a tabela igual aos `report.txt`. Roteiro do STFC:
+`deploy/stfc-completo/ZABBIX.md`.

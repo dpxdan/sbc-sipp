@@ -7,7 +7,8 @@ Subcomandos:
                     com o timestamp original de cada amostra. Com --follow, acompanha
                     a execucao em andamento (o run do flux-loadtest.sh usa este modo).
   setup             cria o grupo e os hosts (um por servidor do teste + <prefixo>run)
-                    e vincula os templates; opcionalmente importa o template YAML.
+                    e vincula os templates; opcionalmente importa o template YAML. Cria ou
+                    atualiza o dashboard "Flux Loadtest - Resultados (<prefixo>)".
   check             testa a API e o trapper.
   bootstrap         (laboratorio) troca a senha inicial do Admin e cria um token de API.
 
@@ -256,7 +257,7 @@ class RunReader:
         self.hosts = {}           # id -> role
         self.metric_tails = {}    # id -> (Tail, header)
         self.sip_tail = Tail(os.path.join(self.dir, "sip", "stats.csv"))
-        self.sip_stats = {"hdr": None, "peak_cc": 0, "peak_cps": 0.0, "last": None}
+        self.sip_stats = {"hdr": None, "peak_cc": 0, "peak_cps": 0.0, "last": None, "rt_200_c": None}
         self.uas_tail = Tail(os.path.join(self.dir, "uas", "stats.csv"))
         self.uas_stats = {"hdr": None, "last": None}
         self.guard_tail = Tail(os.path.join(self.dir, "guard.log"))
@@ -267,6 +268,7 @@ class RunReader:
         self.sent_keys = set()
         self.sb_tail = Tail(os.path.join(self.dir, "mysql", "run.txt"))
         self.info_sent = False
+        self.info = {}
 
     def path(self, *p):
         return os.path.join(self.dir, *p)
@@ -366,6 +368,9 @@ class RunReader:
                 ms = sipp_ms(g(col))
                 if ms is not None:
                     v[key] = ms
+            rt_c = sipp_ms(g("ResponseTime2(C)"))
+            if rt_c is not None:
+                self.sip_stats["rt_200_c"] = rt_c
             self.sip_stats["peak_cc"] = max(self.sip_stats["peak_cc"], v["current_calls"])
             self.sip_stats["peak_cps"] = max(self.sip_stats["peak_cps"], float(v["call_rate"]))
             self.sip_stats["last"] = v
@@ -472,6 +477,7 @@ class RunReader:
         m = re.match(r"\d{8}-\d{6}-?(.*)", info.get("execucao", ""))
         info["label"] = (m.group(1) if m else "") or "-"
         self.s.add(self.run_host, "flt.run.info", self.first_ts(), info)
+        self.info = info
         self.info_sent = True
 
     def poll(self):
@@ -495,7 +501,10 @@ class RunReader:
             pass
         ends = [e for _, e in self.phase_end.values()]
         end = max(ends) if ends else int(time.time())
-        r = {"status": status, "motivo": motivo or "-", "duracao_s": max(0, end - self.first_ts())}
+        # execucao e rotulo no mesmo valor do resultado: uma linha por execucao no dashboard
+        r = {"status": status, "motivo": motivo or "-", "duracao_s": max(0, end - self.first_ts()),
+             "execucao": self.info.get("execucao") or os.path.basename(self.dir),
+             "label": self.info.get("label") or "-"}
         last = self.sip_stats["last"]
         if last:
             ok, fail = last["success_c"], last["failed_c"]
@@ -503,6 +512,8 @@ class RunReader:
                       "sip_falha_pct": round(fail * 100.0 / (ok + fail), 2) if ok + fail else 0,
                       "sip_pico_simultaneas": self.sip_stats["peak_cc"],
                       "sip_pico_cps": self.sip_stats["peak_cps"]})
+            if self.sip_stats["rt_200_c"] is not None:
+                r["sip_invite_200_ms"] = self.sip_stats["rt_200_c"]
         uas = self.uas_stats["last"]
         if uas:
             r.update({"uas_recebidas": uas["received_c"], "uas_sucesso": uas["success_c"],
@@ -710,6 +721,97 @@ def setup_scripts(api, gid, a):
         log(f"perfis no menu: {', '.join(profiles)} (o agent so aceita os do include gerado por flux-loadtest-zbx agent-conf)")
 
 
+# Dashboard global de resultados. Tipos de campo de widget da API do Zabbix 7.x.
+WF_INT, WF_STR, WF_GROUP, WF_ITEM = 0, 1, 2, 4
+DASH_COLS = 72  # grade do dashboard no Zabbix 7.x
+RESULT_COLUMNS = [
+    ("Execucao", "flt.result[execucao]"), ("Status", "flt.result[status]"),
+    ("Criadas", "flt.result[sip_criadas]"), ("Falhas (%)", "flt.result[sip_falha_pct]"),
+    ("Pico simultaneas", "flt.result[sip_pico_simultaneas]"), ("Pico CPS", "flt.result[sip_pico_cps]"),
+    ("INVITE -> 200", "flt.result[sip_invite_200_ms]"),
+    ("Nao chegaram ao atendedor", "flt.result[uas_nao_chegaram]"), ("Motivo", "flt.result[motivo]"),
+]
+
+
+def wfield(ftype, name, value):
+    return {"type": ftype, "name": name, "value": value}
+
+
+def svggraph(name, x, y, datasets, w=DASH_COLS // 2, h=5):
+    """Grafico por padrao de host e de nome de item: vale para qualquer prefixo e host novo."""
+    fields = [wfield(WF_INT, "legend_lines", 2)]
+    for i, (hosts, items, color, axis) in enumerate(datasets):
+        fields += [wfield(WF_INT, f"ds.{i}.dataset_type", 1), wfield(WF_STR, f"ds.{i}.color", color),
+                   wfield(WF_INT, f"ds.{i}.axisy", axis)]
+        fields += [wfield(WF_STR, f"ds.{i}.hosts.{j}", hst) for j, hst in enumerate(hosts)]
+        fields += [wfield(WF_STR, f"ds.{i}.items.{j}", it) for j, it in enumerate(items)]
+    if any(d[3] for d in datasets):
+        fields.append(wfield(WF_INT, "righty", 1))
+    return {"type": "svggraph", "name": name, "x": x, "y": y, "width": w, "height": h,
+            "view_mode": 0, "fields": fields}
+
+
+def dashboard_pages(p, gid, result_items):
+    """Paginas do dashboard. p = prefixo dos hosts; result_items = {chave: itemid} do host run."""
+    run, half = p + "run*", DASH_COLS // 2
+    cols = []
+    for i, (label, key) in enumerate((c for c in RESULT_COLUMNS if c[1] in result_items)):
+        cols += [wfield(WF_STR, f"columns.{i}.name", label), wfield(WF_ITEM, f"columns.{i}.itemid", result_items[key])]
+    resultado = [
+        {"type": "itemhistory", "name": "Resultado de cada execucao", "x": 0, "y": 0, "width": DASH_COLS,
+         "height": 7, "view_mode": 0,
+         "fields": cols + [wfield(WF_INT, "layout", 1), wfield(WF_INT, "show_lines", 50),
+                            wfield(WF_INT, "show_timestamp", 1)]},
+        svggraph("CPS: alvo e realizado", 0, 7, [([run], ["SIPp: CPS alvo", "SIPp: CPS no periodo"], "2774A4", 0)]),
+        svggraph("Chamadas simultaneas", half, 7, [([run], ["SIPp: chamadas simultaneas",
+                                                         "Atendedor: chamadas simultaneas"], "1A7C11", 0)]),
+        svggraph("INVITE -> 100 e INVITE -> 200", 0, 12, [([run], ["SIPp: INVITE -> 100*", "SIPp: INVITE -> 200*"],
+                                                           "F63100", 0)]),
+        svggraph("Falhas e retransmissoes por periodo", half, 12,
+                 [([run], ["SIPp: falhas no periodo (% das encerradas)"], "F63100", 0),
+                  ([run], ["SIPp: retransmissoes no periodo"], "A54F10", 1)]),
+        {"type": "problems", "name": "Problemas do teste de carga", "x": 0, "y": 17, "width": DASH_COLS,
+         "height": 4, "view_mode": 0, "fields": [wfield(WF_GROUP, "groupids.0", gid), wfield(WF_INT, "show_lines", 10)]},
+    ]
+    servidores = [
+        svggraph("CPU total por servidor", 0, 0, [([p + "*"], ["CPU total"], "2774A4", 0)]),
+        svggraph("Memoria usada por servidor", half, 0, [([p + "*"], ["Memoria usada"], "6C59DC", 0)]),
+        svggraph("FreeSWITCH: sessoes e chamadas", 0, 5,
+                 [([p + "fs*"], ["FreeSWITCH: sessoes", "FreeSWITCH: chamadas"], "1A7C11", 0)]),
+        svggraph("OpenSIPS: memoria compartilhada e dialogos", half, 5,
+                 [([p + "opensips*"], ["OpenSIPS: memoria compartilhada usada"], "F63100", 0),
+                  ([p + "opensips*"], ["OpenSIPS: dialogos ativos", "OpenSIPS: transacoes em uso"], "2774A4", 1)]),
+        svggraph("MySQL: consultas e CPU", 0, 10,
+                 [([p + "db*"], ["MySQL: consultas"], "A54F10", 0), ([p + "db*"], ["MySQL: CPU*"], "6C59DC", 1)]),
+        svggraph("Pacotes recebidos por servidor", half, 10, [([p + "*"], ["Pacotes recebidos"], "AC8C14", 0)]),
+    ]
+    return [{"name": "Resultados", "widgets": resultado}, {"name": "Servidores", "widgets": servidores}]
+
+
+def setup_dashboard(api, prefix, gid):
+    """Dashboard global "Flux Loadtest - Resultados (<prefixo>)": criado ou atualizado (idempotente).
+    Graficos por padrao de host e item; a tabela de resultados usa os itens do host <prefixo>run."""
+    name = f"Flux Loadtest - Resultados ({prefix})"
+    run = api.call("host.get", {"filter": {"host": [prefix + "run"]}, "output": ["hostid"]})
+    result_items = {}
+    if run:
+        for i in api.call("item.get", {"hostids": run[0]["hostid"], "output": ["itemid", "key_"],
+                                       "filter": {"key_": [k for _, k in RESULT_COLUMNS]}}):
+            result_items[i["key_"]] = i["itemid"]
+    missing = [k for _, k in RESULT_COLUMNS if k not in result_items]
+    if missing:
+        log("AVISO: itens ausentes no host " + prefix + "run (" + ", ".join(missing)
+            + "): reimporte o template (--import-template); a tabela fica sem essas colunas")
+    spec = {"name": name, "display_period": 60, "auto_start": 0, "pages": dashboard_pages(prefix, gid, result_items)}
+    found = api.call("dashboard.get", {"filter": {"name": [name]}, "output": ["dashboardid"]})
+    if found:
+        api.call("dashboard.update", dict(spec, dashboardid=found[0]["dashboardid"]))
+        log(f"dashboard atualizado: {name}")
+    else:
+        api.call("dashboard.create", spec)
+        log(f"dashboard criado: {name}")
+
+
 def cmd_setup(a):
     api = Api(a.api_url, read_token(a.token_file), a.insecure)
     log(f"API {a.api_url}: Zabbix {api.call('apiinfo.version', auth=False)}")
@@ -767,6 +869,12 @@ def cmd_setup(a):
         if not a.gen_agent:
             die(E_USAGE, "--scripts exige --gen-agent IP (os scripts rodam no agent do host gen)")
         setup_scripts(api, gid, a)
+    try:
+        setup_dashboard(api, a.prefix, gid)
+    except RuntimeError as e:
+        # hosts e templates ja estao prontos; o dashboard depende de permissao do usuario do token
+        log(f"AVISO: dashboard nao criado: {e}")
+        return E_REMOTE
     return E_OK
 
 
