@@ -268,6 +268,18 @@ zbx_include_resolve() {
     return 1
 }
 
+# Valida a configuracao do agentd (com os includes). -T so existe em versoes novas; no 6.0
+# (pacote do Debian) o -t agent.ping carrega o arquivo inteiro e falha em linha invalida, sem
+# executar UserParameter.
+zbx_agent_validate() {
+    local conf=$1
+    if zabbix_agentd -h 2>&1 | grep -qE '(^|[[:space:]])-T([[:space:],]|$)'; then
+        zabbix_agentd -T -c "${conf}"
+    else
+        zabbix_agentd -c "${conf}" -t agent.ping
+    fi
+}
+
 # Linhas ativas do agentd (conf principal + includes, menos o nosso): PARAMETRO=valor.
 # Arquivo sem o parametro nao e erro (pipefail): sempre retorna 0.
 zbx_agent_lines() {
@@ -329,7 +341,7 @@ prep_zabbix_agent() {
     fi
     if [[ -n ${ZBX_SERVER} ]] && ((PREP_ZBX_PREEXIST == 0)); then
         # agent instalado agora: so o modo passivo: Server (quem consulta e executa) e sem ServerActive
-        prep_file "${PREP_ZBX_AGENT_CONF}" 0644 root:root 0 zabbix_agentd -T -c "${PREP_ZBX_AGENT_CONF}" \
+        prep_file "${PREP_ZBX_AGENT_CONF}" 0644 root:root 0 zbx_agent_validate "${PREP_ZBX_AGENT_CONF}" \
             < <(sed -E -e "s/^Server=.*/Server=${ZBX_SERVER}/" \
                        -e 's/^ServerActive=(.*)/# ServerActive=\1   # desativado pelo flux-host.sh (so passivo)/' \
                        "${PREP_ZBX_AGENT_CONF}")
@@ -338,7 +350,7 @@ prep_zabbix_agent() {
     # AllowKey exato por perfil: regenerar quando os perfis mudam
     conf=$(FLT_ZBX_RUNNER_CONF=/etc/flux-loadtest/zabbix-runner.conf bash "${src}" agent-conf) \
         || die "flux-loadtest-zbx agent-conf falhou (perfis invalidos?)"
-    prep_file "${PREP_ZBX_INCLUDE}" 0644 root:root 0 zabbix_agentd -T -c "${PREP_ZBX_AGENT_CONF}" <<< "${conf}"
+    prep_file "${PREP_ZBX_INCLUDE}" 0644 root:root 0 zbx_agent_validate "${PREP_ZBX_AGENT_CONF}" <<< "${conf}"
     if ((PREP_CHANGED)); then PREP_RESTART_AGENT=1; fi
     if ! grep -q '^ZABBIX_ENABLED=1' "${PREP_ZBX_PROFILES}"/*.conf 2>/dev/null; then
         warn "nenhum perfil com ZABBIX_ENABLED=1 em ${PREP_ZBX_PROFILES}: copie de ${REPO_DIR}/profiles/ e repita"
