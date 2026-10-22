@@ -779,7 +779,8 @@ Uso: $0 zabbix <sub> [opcoes] [-c ARQUIVO]
 
   setup [--import-template] [--scripts]
                              cria o grupo "Flux Loadtest" e os hosts <ZABBIX_HOST_PREFIX><id>
-                             (servidores da configuracao + gen + run) e vincula os templates.
+                             (servidores da configuracao + gen + run), vincula os templates e
+                             cria/atualiza o dashboard "Flux Loadtest - Resultados (<prefixo>)".
                              --import-template importa antes ${ZBX_TEMPLATE#"${SCRIPT_DIR}/"}
                              Com ZABBIX_GEN_AGENT, o host gen ganha a interface agent e o
                              template de disparo; --scripts cria os scripts do menu Flux

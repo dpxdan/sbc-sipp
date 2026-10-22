@@ -29,6 +29,7 @@ Arquivos deste diretório:
 | Arquivo | Onde roda |
 |---|---|
 | `RESULTADOS.md` | Resultados e achados da campanha de 21/10/2026 |
+| `ZABBIX.md`, `profiles/` | .165 + Zabbix existente: dashboard de resultados, importação das execuções, envio ao vivo e disparo de perfis pelo Zabbix |
 | `loadtest.conf` | .165: `/etc/flux-loadtest/loadtest.conf` |
 | `preflight-165.sh` | .165 (somente leitura) |
 | `preflight-sbc.sh` | .163 e .162 (somente leitura) |

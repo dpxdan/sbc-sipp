@@ -3346,6 +3346,42 @@ zabbix_export:
         tags:
           - tag: 'component'
             value: 'mysql'
+      - uuid: 3b1d65813d90438395525a1ec9722fa3
+        name: 'Resultado: execucao'
+        type: DEPENDENT
+        key: 'flt.result[execucao]'
+        delay: '0'
+        history: 90d
+        trends: '0'
+        value_type: CHAR
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.execucao'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.result'
+        tags:
+          - tag: 'component'
+            value: 'result'
+      - uuid: 1e4d3c758a8148acbab9ec9e606efd36
+        name: 'Resultado: rotulo'
+        type: DEPENDENT
+        key: 'flt.result[label]'
+        delay: '0'
+        history: 90d
+        trends: '0'
+        value_type: CHAR
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.label'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.result'
+        tags:
+          - tag: 'component'
+            value: 'result'
       - uuid: e3900ad65db249caaf6d37ac5eecf356
         name: 'Resultado: status (ok / interrompido)'
         type: DEPENDENT
@@ -3509,6 +3545,24 @@ zabbix_export:
           - type: JSONPATH
             parameters:
               - '$.sip_pico_cps'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.result'
+        tags:
+          - tag: 'component'
+            value: 'result'
+      - uuid: 177d5328b71f40e5946ef60c4578ad6e
+        name: 'Resultado: INVITE -> 200 (media da execucao)'
+        type: DEPENDENT
+        key: 'flt.result[sip_invite_200_ms]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: 'ms'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.sip_invite_200_ms'
             error_handler: DISCARD_VALUE
         master_item:
           key: 'flt.result'

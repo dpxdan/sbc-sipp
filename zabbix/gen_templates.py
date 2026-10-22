@@ -201,6 +201,8 @@ RUN_INFO_ITEMS = [
 ]
 
 RESULT_ITEMS = [
+    it("execucao", "Resultado: execucao", vtype="C"),
+    it("label", "Resultado: rotulo", vtype="C"),
     it("status", "Resultado: status (ok / interrompido)", vtype="C"),
     it("motivo", "Resultado: motivo da interrupcao", vtype="T"),
     it("duracao_s", "Resultado: duracao", "s", None, "U"),
@@ -210,6 +212,7 @@ RESULT_ITEMS = [
     it("sip_falha_pct", "Resultado: falhas (%)", "%"),
     it("sip_pico_simultaneas", "Resultado: pico de simultaneas", "", None, "U"),
     it("sip_pico_cps", "Resultado: pico de CPS"),
+    it("sip_invite_200_ms", "Resultado: INVITE -> 200 (media da execucao)", "ms"),
     it("uas_recebidas", "Resultado: chamadas recebidas pelo atendedor", "", None, "U"),
     it("uas_sucesso", "Resultado: atendedor com sucesso", "", None, "U"),
     it("uas_falhas", "Resultado: atendedor com falha", "", None, "U"),
