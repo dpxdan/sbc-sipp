@@ -268,13 +268,15 @@ zbx_include_resolve() {
     return 1
 }
 
-# Linhas ativas do agentd (conf principal + includes, menos o nosso): PARAMETRO=valor
+# Linhas ativas do agentd (conf principal + includes, menos o nosso): PARAMETRO=valor.
+# Arquivo sem o parametro nao e erro (pipefail): sempre retorna 0.
 zbx_agent_lines() {
     local f
     for f in "${PREP_ZBX_AGENT_CONF}" "${PREP_ZBX_INCLUDE_DIR}"/*.conf; do
         [[ -r ${f} && ${f} != "${PREP_ZBX_INCLUDE}" ]] || continue
-        grep -hE "^[[:space:]]*$1=" "${f}" 2>/dev/null | sed 's/^[[:space:]]*//'
+        grep -hE "^[[:space:]]*$1=" "${f}" 2>/dev/null | sed 's/^[[:space:]]*//' || true
     done
+    return 0
 }
 
 # Agent ja monitorado: avisa o que anularia a restricao do include ou impediria os scripts
