@@ -377,6 +377,9 @@ cmd_check() {
                 chk "estado pelo usuario zabbix (sudo -n)" runuser -u zabbix -- sudo -n /usr/local/sbin/flux-loadtest-zbx state
                 v=$(zabbix_agentd -t flt.profiles.discovery 2>/dev/null | sed -n 's/.*\[t|\(.*\)\]$/\1/p') || true
                 [[ -n ${v} ]] && info "descoberta: ${v}"
+                zbx_include_resolve && info "include do flux-loadtest: ${PREP_ZBX_INCLUDE}" \
+                    || warn "zabbix_agentd.conf sem Include= de diretorio: o include do flux-loadtest nao e lido"
+                chk "include do flux-loadtest presente" test -r "${PREP_ZBX_INCLUDE}"
                 for v in Server ServerActive Include AllowKey DenyKey EnableRemoteCommands; do
                     zbx_agent_lines "${v}" | sed 's/^/  info  agentd: /'
                 done

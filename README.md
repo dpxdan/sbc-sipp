@@ -1426,7 +1426,7 @@ Zabbix (menu Flux Loadtest do host <prefixo>gen)
 |---|---|---|
 | `profiles/*.conf.example` | `/etc/flux-loadtest/profiles.d/<perfil>.conf` | Parâmetros do `run` (`TESTS`, `CPS`, `WINDOW`, `HOLD`, `MEDIA`...), lidos como dado; `ZABBIX_ENABLED=1` publica o perfil |
 | `bin/flux-loadtest-zbx` | `/usr/local/sbin` | Valida o perfil, aplica os tetos, dispara a unidade systemd e grava o estado (`/var/lib/flux-loadtest/zbx-state.json`) |
-| Include do agent | `/etc/zabbix/zabbix_agentd.d/flux-loadtest.conf` | Gerado por `flux-loadtest-zbx agent-conf`: `UserParameter` de descoberta e estado, `AllowKey` exato por perfil e `DenyKey=system.run[*]` |
+| Include do agent | `flux-loadtest.conf` no diretório do `Include=` do `zabbix_agentd.conf` (pacote oficial: `/etc/zabbix/zabbix_agentd.d/`; pacote do Debian: `/etc/zabbix/zabbix_agentd.conf.d/`) | Gerado por `flux-loadtest-zbx agent-conf`: `UserParameter` de descoberta e estado, `AllowKey` exato por perfil e `DenyKey=system.run[*]` |
 | Template `Flux Loadtest - Disparo` | host `<prefixo>gen` (interface agent) | Estado (30 s), descoberta dos perfis (10 min) e, por perfil, código, fim, resultado e diretório da última execução |
 | Scripts globais | menu **Flux Loadtest** | Iniciar perfil (lista dos perfis, com confirmação), Plano (dry-run), Parar teste (com confirmação), Estado |
 
