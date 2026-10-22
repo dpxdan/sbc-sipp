@@ -37,6 +37,7 @@ Arquivos deste diretório:
 | `sql/00-verificacao.sql` | Banco, nó 1 (somente leitura) |
 | `sql/10-opensips-address-add.sql`, `sql/90-opensips-address-remove.sql` | Banco: libera ou remove o .165 como operadora |
 | `sql/20-dids-create.sql`, `sql/95-dids-remove.sql` | Banco: massa de DIDs de teste |
+| `dids-limpar.sh` | Banco, nó 1 (.161): conta e remove os DIDs de teste em lotes, com confirmação (seção 8) |
 
 ## O que muda em produção
 
@@ -45,9 +46,10 @@ Arquivos deste diretório:
 | Usuário `loadtest` + sudoers do `fs_cli`/`opensips-cli` | .163, .162 | Baixo (só leitura de status) | `userdel -r loadtest` e remover `/etc/sudoers.d/flux-loadtest` |
 | `flux_monitor` + `/etc/mysql/flux-loadtest.cnf` | .161, .164 | Baixo (`PROCESS`, `REPLICATION CLIENT`) | `DROP USER 'flux_monitor'@'localhost'` e remover o cnf |
 | .165 no grupo 10 da `address` + `address_reload` | Banco + .163 | **O .165 vira origem confiável no OpenSIPS** e pode chamar qualquer DID | `90-opensips-address-remove.sql` + `address_reload` |
-| Conta de teste e DIDs `5500000xxxxxx` | Banco | CDR por chamada na conta de teste | `95-dids-remove.sql` e desativar a conta |
+| Conta de teste e DIDs `5500000xxxxxx` | Banco | CDR por chamada na conta de teste | `dids-limpar.sh remover` (seção 8), DID modelo pela interface e desativar a conta |
 | `fsctl sps` / `fsctl max_sessions` | .163, .162 | **FreeSWITCH ativo com clientes:** limites maiores aceitam mais carga; se o servidor saturar, chamadas reais degradam | `fs-limites.sh restaurar` (ou restart do FS, que volta ao `switch.conf`) |
 | Liberações de firewall, fail2ban e Event Guard para o .165 | .165, .163, .162 | Baixo | Remover as regras anotadas |
+| Integração com o Zabbix: hosts `flt-*`, dashboard, scripts do menu, manutenção sem alertas; include e wrapper do agent no .165 | Zabbix de produção, .165 | Baixo: dados só por trapper; o menu dispara carga real (restrito a Zabbix administrators) | `ZABBIX.md`, seção Reversão |
 | Carga SIP | todos | **Tráfego real no mesmo OpenSIPS, FS e banco; a interface web divide CPU com o gerador** | Guard, degraus, Ctrl+C (parada suave) |
 
 **Limites do FreeSWITCH:**
@@ -466,14 +468,31 @@ mysql flux < /opt/flux-loadtest/deploy/stfc-completo/sql/90-opensips-address-rem
 opensips-cli -x mi address_reload
 ```
 
-DIDs de teste (no .161; repita até `removidos = 0`):
+DIDs de teste (no .161, nó 1 do banco). Primeiro a contagem, que não altera nada; na campanha
+de 21/10/2026 a conta é a 211 e o esperado é 99.999 DIDs a remover, mais o modelo, que fica:
 
 ```bash
-{ echo "SET @conta = <ID>;"; cat /opt/flux-loadtest/deploy/stfc-completo/sql/95-dids-remove.sql; } | mysql flux
+cd /opt/flux-loadtest && git pull --ff-only && bash deploy/stfc-completo/dids-limpar.sh contar --conta 211
 ```
 
+Depois a remoção. Ela pede para digitar `REMOVER`, apaga em lotes de 5.000 pela chave primária
+com 1 s entre os lotes (o PXC replica sem flow control) e mostra a contagem de novo no fim:
+
+```bash
+cd /opt/flux-loadtest && bash deploy/stfc-completo/dids-limpar.sh remover --conta 211
+```
+
+- **O que entra:** só os DIDs da conta informada, na faixa `5500000xxxxxx`, DIRECT-IP para
+  `200.159.177.165:5090`. Qualquer outro DID, inclusive da mesma faixa em outra conta, aparece
+  na contagem e fica.
+- **O DID modelo `5500000000000` fica:** remova pela interface (DIDs), para o produto dele
+  (83673) sair junto. `--incluir-modelo` remove pelo banco, deixando o produto órfão.
+- **CDRs:** os das chamadas de teste ficam, como histórico da conta de teste.
+- Validado num MySQL 8.4 com as colunas em `utf8mb3`, como as do Flux: removeu só os clones,
+  manteve o modelo, os DIDs da conta fora do alvo e os da faixa em outra conta.
+
 Depois:
-- desative a conta de teste pela interface;
+- remova o DID modelo e desative a conta de teste pela interface;
 - no .165, remova as chaves de coleta dos servidores:
 
 ```bash
@@ -481,7 +500,9 @@ cd /opt/flux-loadtest && ./flux-loadtest.sh keys revoke -c /etc/flux-loadtest/lo
 ```
 
 - desfaça as liberações de firewall, fail2ban e Event Guard do .165;
-- guarde os pacotes `/var/lib/flux-loadtest/results/*.tar.gz` para a análise.
+- guarde os pacotes `/var/lib/flux-loadtest/results/*.tar.gz` para a análise;
+- Zabbix (agent do .165, hosts `flt-*`, dashboard, scripts e manutenção): `ZABBIX.md`, seção
+  Reversão. Pode ficar, se as próximas campanhas forem usar.
 
 Os backups de cada `prepare` ficam em `/var/backups/flux-loadtest/<data>/` no servidor onde
 ele rodou. O usuário `loadtest` e o `flux_monitor` podem ficar para próximas campanhas, ou ser

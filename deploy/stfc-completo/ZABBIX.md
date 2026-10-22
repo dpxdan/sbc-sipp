@@ -171,11 +171,63 @@ Uso: *Monitoring > Hosts*, menu do host `flt-gen` > **Flux Loadtest** > Iniciar 
 journalctl -u flux-loadtest-zbx -n 50 --no-pager
 ```
 
+## 6. Sem alertas para o suporte
+
+As ações de notificação do Zabbix de produção (Telegram e e-mail) não têm condição: qualquer
+gatilho chegaria ao suporte, inclusive os do guard durante um teste. Para evitar isso sem mudar
+gatilhos, templates ou ações, os hosts `flt-*` ficam numa **manutenção com coleta de dados**:
+
+| Item | Valor |
+|---|---|
+| Nome | `Flux Loadtest - sem alertas ao suporte` |
+| Alvo | grupo de hosts `Flux Loadtest` (os 7 `flt-*`; os hosts reais ficam fora) |
+| Tipo | com coleta de dados: os valores chegam e o dashboard funciona |
+| Validade | 180 dias a partir de 22/10/2026 (até 20/04/2027) |
+| Efeito | problemas dos `flt-*` suprimidos: as ações pausam suprimidos e a visão padrão de problemas não os mostra |
+
+Para recriar: *Data collection > Maintenance > Create maintenance period*, com coleta de dados,
+grupo `Flux Loadtest` e um período único. Para voltar a alertar: apagar a manutenção.
+
+Alternativa definitiva, decisão do suporte: nas ações de notificação, a condição "tag `scope`
+diferente de `loadtest`" (todos os gatilhos do flux-loadtest têm essa tag).
+
+## Estado em produção (22/10/2026)
+
+| Item | Estado |
+|---|---|
+| Zabbix | `zabbixnew.flux.net.br` (7.2.3), server `200.159.177.242` |
+| Hosts | `flt-run`, `flt-opensips`, `flt-fs1`, `flt-fs2`, `flt-db1`, `flt-db2`, `flt-gen` (grupo `Flux Loadtest`) |
+| Dashboard | `Flux Loadtest - Resultados (flt-)` |
+| Execuções importadas | as 9 de 21/10/2026. As 8 primeiras foram enviadas a partir de cópias, fora do .165: os diretórios delas no .165 não têm `zabbix.sent`; **não reenviar**, o Zabbix duplicaria os valores |
+| Envio ao vivo | ativo (`ZABBIX_SERVER=200.159.177.242` no `loadtest.conf` do .165) |
+| Agent do .165 | o `zabbix-agent` 6.0.14 do Debian que já monitorava o host; include em `/etc/zabbix/zabbix_agentd.conf.d/flux-loadtest.conf`, ao lado do `userparameter_fluxsbc.conf` |
+| Host `flt-gen` | interface agent `200.159.177.165:10050` e template de disparo |
+| Scripts do menu | restritos ao grupo `Zabbix administrators`; perfis `stfc-piloto`, `stfc-cps20`, `stfc-c1000` |
+| Primeiro uso | `stfc-cps20` iniciado pelo menu em 22/10/2026 02:57 e parado pelo "Parar teste" (código 6) |
+| Manutenção | seção 6 |
+
+**Achados na instalação do agent no .165** (corrigidos no repositório):
+
+| Problema | Correção |
+|---|---|
+| O include ia para `/etc/zabbix/zabbix_agentd.d/` (pacote oficial); o agent do Debian lê `/etc/zabbix/zabbix_agentd.conf.d/*.conf` | O `prepare` usa o diretório do `Include=` do agent (#13) |
+| A auditoria do agent abortava quando um include não tinha a chave procurada (`pipefail`) | #14 |
+| A validação usava `zabbix_agentd -T`, que o agent 6.0 não tem; o include era sempre restaurado | Sem `-T`, valida com `zabbix_agentd -c CONF -t agent.ping` (#15) |
+| O `prepare` sem `--dry-run` pede `SIM`; um filtro `\| grep` no comando esconde a pergunta e parece travado | Rodar sem filtro |
+
+Templates do flux-loadtest vinculados a hosts reais (`Flux Loadtest - FreeSWITCH` e `OpenSIPS`
+em `SBC-STFC-162`/`SBC-STFC-163`; `Gerador` e `Execucao` em `SBC-STFC-INTERFACEWEB`) não
+recebem dados nesses hosts: desvincular.
+
 ## Reversão
+
+O `zabbix-agent` do .165 já existia e monitora o servidor: a reversão tira só o que o
+flux-loadtest acrescentou.
 
 | Item | Como desfazer |
 |---|---|
-| Agent no .165 | `systemctl disable --now zabbix-agent`; `apt purge zabbix-agent`; remover `/etc/sudoers.d/flux-loadtest-zbx`, `/usr/local/sbin/flux-loadtest-zbx` e `/etc/flux-loadtest/profiles.d/` |
+| Agent no .165 | Remover `/etc/zabbix/zabbix_agentd.conf.d/flux-loadtest.conf` e `systemctl restart zabbix-agent`; remover `/etc/sudoers.d/flux-loadtest-zbx`, `/usr/local/sbin/flux-loadtest-zbx` e `/etc/flux-loadtest/profiles.d/`. Backup do estado anterior em `/var/backups/flux-loadtest/20261022-024752` |
 | Envio ao vivo | Esvaziar `ZABBIX_SERVER` no `loadtest.conf` |
 | Hosts, templates, scripts e dashboard | No Zabbix: excluir o grupo de hosts `Flux Loadtest` e seus hosts, os templates do grupo `Templates/Flux Loadtest`, os scripts do menu `Flux Loadtest` e o dashboard |
+| Manutenção | Excluir `Flux Loadtest - sem alertas ao suporte` |
 | Token | Revogar em *Users > API tokens* e apagar `/etc/flux-loadtest/zabbix_api.token` |
