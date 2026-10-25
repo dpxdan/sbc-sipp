@@ -1,0 +1,9 @@
+site_name: sbc-sipp — Flux Loadtest
+site_description: Documentação dos testes de carga do FluxSBC
+repo_url: https://github.com/dpxdan/sbc-sipp
+docs_dir: docs
+site_dir: site
+nav:
+  - Início: index.md
+theme:
+  name: mkdocs
