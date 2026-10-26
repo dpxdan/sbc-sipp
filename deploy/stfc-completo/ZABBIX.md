@@ -131,9 +131,70 @@ Perfis do STFC (deste diretório):
 | `stfc-piloto` | 10 CPS por 60 s |
 | `stfc-cps20` | 20 CPS sustentados por ~3 min (o maior valor com atraso aceitável hoje) |
 | `stfc-c1000` | 1000 simultâneas a 10 CPS |
+| `stfc-c3000` | 3000 simultâneas a 10 CPS (hold de 300 s); exige limites maiores nos FS |
+| `stfc-c5000` | 5000 simultâneas a 10 CPS (hold de 500 s); exige limites maiores nos FS |
 
 O wrapper recusa CPS acima de 50 e janela acima de 3600 s
 (`/etc/flux-loadtest/zabbix-runner.conf`).
+
+### Perfis de 3000 e 5000 simultâneas
+
+Os dois mantêm os 10 CPS do `stfc-c1000` e só aumentam o hold, para medir chamadas simultâneas
+sem misturar com o atraso de CPS do .162 (A1). Simultâneas em regime = CPS x hold.
+
+| Perfil | Janela / hold | Patamar | Duração total | `-l` do sipp | `fs-limites.sh aplicar` (nos 2 FS) |
+|---|---|---|---|---|---|
+| `stfc-c3000` | 420 s / 300 s | 120 s em 3000 | ~14 min | 3648 | `150 3500` |
+| `stfc-c5000` | 620 s / 500 s | 120 s em 5000 | ~21 min | 6048 | `150 5500` |
+
+O `max-sessions` segue a regra da seção 6 do `README.md`: metade das chamadas por FS, 2 sessões
+por chamada e 500 de margem para o tráfego real. Quando o FS chega ao `max-sessions`, ele
+responde `503 Maximum Calls In Progress` **também para as chamadas reais**, até o guard parar o
+teste.
+
+O `switch.conf.xml` dos dois FS foi alterado para `max-sessions` 5000 e `sessions-per-second`
+300 depois da campanha de 21/10 (que mediu 2000 por FS). O arquivo só vale depois de um restart,
+então confira o valor em uso antes de cada perfil:
+
+```bash
+bash /opt/flux-loadtest/deploy/stfc-completo/fs-limites.sh mostrar
+```
+
+| `max_sessions` em uso | `stfc-c3000` | `stfc-c5000` |
+|---|---|---|
+| 5000 | cabe (~3000 por FS); o `aplicar 150 3500` mantém 5000 | **não cabe**: ~5000 do teste + o tráfego real; aplicar `150 5500` |
+| 2000 | aplicar `150 3500` | aplicar `150 5500` |
+
+O mesmo arquivo traz três itens que valem para os dois perfis:
+- `core-db-dsn` no MySQL (DSN `FLUX`, cluster PXC): a tabela `channels` de cada FS passa a ter
+  milhares de linhas e cada chamada gera escritas no cluster. O volume de escritas acompanha o
+  CPS (10, como no `stfc-c1000`), mas acompanhe o flow control do PXC no dashboard.
+- `max-db-handles` 50 e `db-handle-timeout` 10: se o pool esgotar, a criação de canal espera
+  até 10 s. Procure `DB handle` e `SQL ERR` no log do FS durante o teste.
+- `loglevel` debug: o volume de log acompanha o CPS e o espaço em disco do FS cai mais rápido
+  em testes longos. Pode ser baixado sem restart com `fsctl loglevel info`.
+
+**Antes do `stfc-c3000`:**
+
+```bash
+# nos dois FS (.163 e .162)
+bash /opt/flux-loadtest/deploy/stfc-completo/fs-limites.sh aplicar 150 3500
+# no .163, ~30 s depois: o max dos dois nos precisa ter subido
+opensips-cli -x mi lb_list | grep -E '"(uri|max|load)"'
+```
+
+**Antes do `stfc-c5000`**, só depois de um `stfc-c3000` sem falhas, aplicar `150 5500` e
+conferir nos dois FS, porque cada nó chega a ~5500 sessões:
+
+| Item | Comando | Referência |
+|---|---|---|
+| Memória | `free -g` | 2,2 GB no FS com 2000 sessões (A14): projeta ~6 GB com 5500 |
+| Threads | `systemctl show freeswitch -p TasksMax,LimitNPROC` e `sysctl kernel.threads-max` | ~1 thread por sessão: 2024 threads com 2000 sessões (A14) |
+| Portas RTP | `grep -E 'rtp-(start\|end)-port' /etc/freeswitch/autoload_configs/switch.conf.xml` | sem os parâmetros, vale o padrão 16384-32768 (~8 mil sessões RTP, 2 portas cada). `bypass_media=0`: 2 legs com RTP por chamada, ~5000 por FS no `stfc-c5000` mais o tráfego real |
+| Timeout de mídia | `grep -rE 'rtp-timeout-sec\|media_timeout' /etc/freeswitch` | com `MEDIA=none` não há RTP: um timeout menor que o hold (500 s) derruba as chamadas |
+| Memória do OpenSIPS | `opensips-cli -x mi get_statistics shmem:` | 21,7% com 1962 diálogos (A14) |
+
+Depois de cada execução, nos dois FS: `bash fs-limites.sh restaurar`.
 
 ```bash
 install -d -m 0755 /etc/flux-loadtest/profiles.d && install -m 0644 /opt/flux-loadtest/deploy/stfc-completo/profiles/stfc-*.conf /etc/flux-loadtest/profiles.d/ && ls -l /etc/flux-loadtest/profiles.d
