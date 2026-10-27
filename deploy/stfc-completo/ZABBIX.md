@@ -197,19 +197,21 @@ Perfis do STFC (deste diretório):
 | `stfc-cps20` | 20 CPS sustentados por ~3 min (o maior valor com atraso aceitável hoje) |
 | `stfc-cps30` | 30 CPS sustentados por ~220 s (hold de 30 s): banco, `sps` e o A1; exige `fs-limites 150 1300` |
 | `stfc-c1000` | 1000 simultâneas a 10 CPS |
+| `stfc-c2000` | 2000 simultâneas a 10 CPS (hold de 200 s); exige limites maiores nos FS |
 | `stfc-c3000` | 3000 simultâneas a 10 CPS (hold de 300 s); exige limites maiores nos FS |
 | `stfc-c5000` | 5000 simultâneas a 10 CPS (hold de 500 s); exige limites maiores nos FS |
 
 O wrapper recusa CPS acima de 50 e janela acima de 3600 s
 (`/etc/flux-loadtest/zabbix-runner.conf`; exemplo em `profiles/zabbix-runner.conf.example`).
 
-### Perfis de 3000 e 5000 simultâneas
+### Perfis de 2000, 3000 e 5000 simultâneas
 
-Os dois mantêm os 10 CPS do `stfc-c1000` e só aumentam o hold, para medir chamadas simultâneas
+Os três mantêm os 10 CPS do `stfc-c1000` e só aumentam o hold, para medir chamadas simultâneas
 sem misturar com o atraso de CPS do .162 (A1). Simultâneas em regime = CPS x hold.
 
 | Perfil | Janela / hold | Patamar | Duração total | `-l` do sipp | `fs-limites.sh aplicar` (nos 2 FS) |
 |---|---|---|---|---|---|
+| `stfc-c2000` | 320 s / 200 s | 120 s em 2000 | ~13 min | 2448 | `150 2800` |
 | `stfc-c3000` | 420 s / 300 s | 120 s em 3000 | ~16 min | 3648 | `150 4200` |
 | `stfc-c5000` | 620 s / 500 s | 120 s em 5000 | ~23 min | 6048 | `150 7000` |
 
@@ -232,12 +234,13 @@ então confira o valor em uso antes de cada perfil:
 bash /opt/flux-loadtest/deploy/stfc-completo/fs-limites.sh mostrar
 ```
 
-| `max_sessions` em uso | `stfc-c3000` | `stfc-c5000` |
-|---|---|---|
-| 5000 | cabe; o `aplicar 150 4200` mantém 5000 | **não cabe**: ~5500 no .162 + o tráfego real; aplicar `150 7000` |
-| 2000 ou 3500 | aplicar `150 4200` | aplicar `150 7000` |
+| `max_sessions` em uso | `stfc-c2000` | `stfc-c3000` | `stfc-c5000` |
+|---|---|---|---|
+| 5000 | cabe; o `aplicar 150 2800` mantém 5000 | cabe; o `aplicar 150 4200` mantém 5000 | **não cabe**: ~5500 no .162 + o tráfego real; aplicar `150 7000` |
+| 3500 | cabe; o `aplicar 150 2800` mantém 3500 | aplicar `150 4200` | aplicar `150 7000` |
+| 2000 | aplicar `150 2800` | aplicar `150 4200` | aplicar `150 7000` |
 
-O mesmo arquivo traz três itens que valem para os dois perfis:
+O mesmo arquivo traz três itens que valem para esses perfis:
 - `core-db-dsn` no MySQL (DSN `FLUX`, cluster PXC): a tabela `channels` de cada FS passa a ter
   milhares de linhas e cada chamada gera escritas no cluster. O volume de escritas acompanha o
   CPS (10, como no `stfc-c1000`), mas acompanhe o flow control do PXC no dashboard.
@@ -247,6 +250,8 @@ O mesmo arquivo traz três itens que valem para os dois perfis:
 - `loglevel`: em 27/10/2026 estava em DISABLE nos dois FS (`fsctl loglevel`). Bom para o
   desempenho, mas nenhum aviso do FS chega ao log, nem o de pool esgotado: use as métricas do
   coletor. Com `loglevel` debug, o volume de log acompanha o CPS e o disco cai mais rápido.
+
+**Antes do `stfc-c2000`:** o mesmo procedimento abaixo, com `aplicar 150 2800`.
 
 **Antes do `stfc-c3000`:**
 

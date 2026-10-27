@@ -79,12 +79,13 @@ equivalem às opções do `run`).
 | `stfc-cps20` | 10 a 20 CPS em 40 s (+5 a cada 20 s), janela 240 s, hold 20 s | ~9 min | — |
 | `stfc-cps30` | 10 a 30 CPS em 80 s (+5 a cada 20 s), ~220 s em 30 CPS, hold 30 s (~900 simultâneas) | ~10 min | `150 1300` |
 | `stfc-c1000` | 1000 simultâneas a 10 CPS (janela 150 s, hold 100 s) | ~9 min | — |
+| `stfc-c2000` | 2000 simultâneas a 10 CPS (janela 320 s, hold 200 s, 120 s no patamar, `-l` 2448) | ~13 min | `150 2800` |
 | `stfc-c3000` | 3000 simultâneas a 10 CPS (janela 420 s, hold 300 s, 120 s no patamar, `-l` 3648) | ~16 min | `150 4200` |
 | `stfc-c5000` | 5000 simultâneas a 10 CPS (janela 620 s, hold 500 s, 120 s no patamar, `-l` 6048) | ~23 min | `150 7000` |
 
 Durações com o baseline e o cooldown de 120 s do `loadtest.conf` do STFC. Todos com `MEDIA=none`.
 
-Ordem recomendada: `stfc-piloto` -> `stfc-c1000` -> `stfc-c3000` -> `stfc-c5000` (só depois de um
+Ordem recomendada: `stfc-piloto` -> `stfc-c1000` -> `stfc-c2000` -> `stfc-c3000` -> `stfc-c5000` (só depois de um
 `stfc-c3000` sem falhas) e, separadamente, `stfc-cps20` -> `stfc-cps30`.
 
 Antes de perfis longos, tire uma foto de capacidade com o hold planejado. Ela alerta timeout de mídia
