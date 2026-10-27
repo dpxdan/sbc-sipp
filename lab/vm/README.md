@@ -31,8 +31,8 @@ templates e cria os hosts; nada é instalado.
 - **Fork do Flux:** acessível pelo servidor de testes (`FLUX_GIT_URL`). Se o repositório for privado, use uma chave de deploy (somente leitura) em `/root/.ssh` com URL `git@...`, ou a credencial do git.
 - **Scripts do `sbc01` (opcional):** os scripts Lua de produção, copiados para o servidor de testes (`FLUX_SCRIPTS_DIR`). Sem eles, valem os do clone.
 
-Recursos sugeridos (laboratório; para medir capacidade, use o dimensionamento do README
-principal):
+Recursos sugeridos (laboratório; para medir capacidade, use o
+[dimensionamento](../../docs/instalacao/vm-teste.md#dimensionamento) da documentação):
 
 | VM | vCPU | Memória | Disco |
 |---|---|---|---|
