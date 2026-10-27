@@ -184,7 +184,16 @@ opensips-cli -x mi lb_list | grep -E '"(uri|max|load)"'
 ```
 
 **Antes do `stfc-c5000`**, só depois de um `stfc-c3000` sem falhas, aplicar `150 5500` e
-conferir nos dois FS, porque cada nó chega a ~5500 sessões:
+conferir nos dois FS, porque cada nó chega a ~5500 sessões. A ação `capacidade` do
+`flux-loadtest.sh` (`README.md`, seção 7.7) faz todas as conferências abaixo de uma vez, sem
+carga, e alerta o que estiver perto do limite ou com timeout de mídia menor que o hold:
+
+```bash
+cd /opt/flux-loadtest && ./flux-loadtest.sh capacidade -c /etc/flux-loadtest/loadtest.conf --hold 500 --label antes-c5000
+```
+
+Os perfis já registram a mesma foto antes, no pico e depois de cada execução
+(`capacidade.csv` no diretório do resultado). Conferência manual:
 
 | Item | Comando | Referência |
 |---|---|---|

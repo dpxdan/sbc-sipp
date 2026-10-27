@@ -170,6 +170,9 @@ SAMPLE_INTERVAL=5
 BASELINE_SECONDS=60
 COOLDOWN_SECONDS=60
 RESULTS_DIR=/var/lib/flux-loadtest/results
+# Foto de capacidade (acao capacidade e fases antes/pico/depois do run): alerta quando o uso
+# passa deste percentual do limite (threads, sessoes, portas RTP, memoria do OpenSIPS...)
+CAPACITY_ALERT_PCT=80
 
 # ------------------------------------------------------------------ Zabbix (opcional)
 # Vazio = sem Zabbix. Com ZABBIX_SERVER, o run envia as amostras por trapper (porta

@@ -96,8 +96,9 @@ Consequências para o teste:
 
 | Arquivo | Função |
 |---|---|
-| `flux-loadtest.sh` | Orquestrador. Ações: `keys`, `check`, `smoke`, `run`, `report`, `zabbix` |
+| `flux-loadtest.sh` | Orquestrador. Ações: `keys`, `check`, `smoke`, `run`, `report`, `zabbix`, `capacidade` |
 | `lib/collector.sh` | Coletor de métricas enviado por SSH (`bash -s`); lê `/proc` e comandos de status |
+| `lib/capacidade.sh` | Foto de limites e uso de cada servidor, enviada por SSH (`bash -s`): threads, memória, sessões, portas RTP, timeout de mídia, OpenSIPS, `load_balancer`, banco (seção 7.7) |
 | `lib/flux_zabbix.py` | Envio ao Zabbix por trapper (ao vivo e importação) e provisionamento dos hosts pela API (seção 19) |
 | `zabbix/flux-loadtest-templates.yaml` | Templates no formato do Zabbix 7.2 (produção: 7.2.3; gerado, não editar à mão) |
 | `zabbix/gen_templates.py` | Gerador dos templates a partir das colunas do coletor |
@@ -308,6 +309,7 @@ Numa VM de teste dentro da rede interna, use os IPs 172.17.4.x.
 | `GUARD_HITS` | `3` | Amostras seguidas acima do limite para interromper |
 | `SAMPLE_INTERVAL` | `5` | Intervalo de coleta (s) |
 | `BASELINE_SECONDS` / `COOLDOWN_SECONDS` | `60` / `60` | Fases sem carga antes e depois |
+| `CAPACITY_ALERT_PCT` | `80` | Foto de capacidade (seção 7.7): alerta quando um uso passa deste percentual do limite ou o livre fica abaixo de 100 menos ele |
 | `RESULTS_DIR` | `/var/lib/flux-loadtest/results` | Onde os resultados são gravados |
 
 ### 5.9 Zabbix (opcional)
@@ -632,6 +634,55 @@ preenchido (seção 19).
 ./flux-loadtest.sh zabbix send /var/lib/flux-loadtest/results/20261007-120000-c1000-cps100
 ```
 
+### 7.7 `capacidade` — foto de limites e uso
+
+**Função:** registrar, em cada servidor, os limites que definem quantas chamadas cabem e
+quanto deles está em uso. Somente leitura, sem carga. O `run` tira a mesma foto três
+vezes: `antes` (depois dos snapshots, antes do baseline), `pico` (no fim da janela de
+envio, com o máximo de chamadas simultâneas, em segundo plano) e `depois` (depois do
+cooldown).
+
+```bash
+./flux-loadtest.sh capacidade --hold 500 --label antes-c5000
+```
+
+| Opção | Padrão | Descrição |
+|---|---|---|
+| `-H, --hold S` | — | Hold planejado: alerta timeout de mídia menor ou igual a ele |
+| `--label TEXTO` | — | Rótulo do diretório (`<data>-capacidade-<rótulo>`) |
+| `--fs-password` | — | Pede a senha do `fs_cli` no terminal |
+
+O que é coletado (`lib/capacidade.sh`):
+
+| Papel | Métricas |
+|---|---|
+| Todos | Memória total e disponível, swap, threads do sistema e `kernel.threads-max`, `RcvbufErrors` de UDP, `rmem_max`, disco livre |
+| Processo (FS, OpenSIPS, MySQL) | Threads, RSS, `LimitNPROC`, `LimitNOFILE`, `TasksMax` do systemd, teto efetivo de threads e uso; arquivos abertos quando o usuário SSH pode ler `/proc/PID/fd` |
+| FreeSWITCH | `max_sessions` e `sps` em uso e no `switch.conf`, sessões atuais e pico, chamadas, `loglevel`, banco interno (SQLite ou ODBC; a idade do `core.db` mostra restart pendente), `max-db-handles`, faixa RTP e portas UDP em uso nela, `rtp-timeout-sec` e `rtp-hold-timeout-sec` dos profiles, `media_timeout` global, disco e tamanho do log |
+| OpenSIPS | Memória compartilhada (total, em uso, pico desde o início), diálogos ativos e com falha, transações, `drop_requests`, `max` e `load` de cada destino do `load_balancer` |
+| MySQL / PXC | Conexões e `max_connections`, pico de conexões, `pxc_strict_mode`, threads de aplicação, flow control, filas de envio e recebimento |
+| VM de teste | `ulimit -n` (suave e rígido) |
+
+Saída no diretório da execução:
+
+| Arquivo | Conteúdo |
+|---|---|
+| `capacidade/<fase>-<host>.env` | Foto bruta, uma linha `chave=valor` por métrica |
+| `capacidade.csv` | Uma linha por servidor e métrica, uma coluna por fase e a coluna `alerta`; pronto para colar no caderno de testes |
+| `capacidade.txt` | Alertas e tabela resumida por servidor (também no `report.txt`) |
+
+Alertas: uso em `*_pct` acima de `CAPACITY_ALERT_PCT`, memória ou disco livre abaixo de
+100 menos ele, timeout de mídia menor ou igual ao hold (com `-M none` não há RTP e as
+chamadas caem), `loglevel` debug, `max_sessions`/`sps` em uso diferentes do
+`switch.conf`, `core.db` escrito com `core-db-dsn` configurado, processo ou comando de
+status ausente e aumento de `RcvbufErrors`, `drop_requests` e diálogos com falha entre
+`antes` e `depois`.
+
+Limitações: o `media_timeout` definido no dialplan ou no Lua não aparece; as portas UDP
+na faixa RTP são contadas por servidor (no .163, OpenSIPS e FS dividem a máquina); a
+idade do `core.db` e os arquivos abertos dependem de o usuário SSH ler o diretório do
+banco e `/proc/PID/fd`.
+
 ## 8. Exemplos de testes
 
 Siga a ordem: cada passo valida o anterior.
@@ -922,7 +973,9 @@ Com `FS_CLI_PASSWORD_FILE` configurado e `-y`, nada é pedido no terminal:
 5. Cria `RESULTS_DIR/<data>-<label>/` e passa a gravar o console em `console.log`.
 6. Testa o SSH de todos os servidores e registra a diferença de relógio.
 7. Gera o CSV de chamadas, o áudio (se `rtp`) e o cenário SIPp.
-8. Salva os snapshots `pre` e inicia os coletores em todos os servidores e na VM.
+8. Salva os snapshots `pre` e a foto de capacidade `antes` (seção 7.7) e inicia os
+   coletores em todos os servidores e na VM. No fim da janela de envio, a foto `pico` é
+   tirada em segundo plano.
 9. Executa as fases:
 
 | Fase | O que acontece |
@@ -934,7 +987,8 @@ Com `FS_CLI_PASSWORD_FILE` configurado e `-y`, nada é pedido no terminal:
 | `web_static` / `web_php` / `web_extra` | Um `wrk` por alvo, com 10 s de intervalo entre eles |
 | `cooldown` | Só coleta: o retorno ao normal (roda mesmo após interrupção) |
 
-10. Para os coletores, salva os snapshots `post`, gera o `report.txt` e o `.tar.gz`.
+10. Para os coletores, salva os snapshots `post` e a foto `depois`, gera o `report.txt`
+    e o `.tar.gz`.
 
 As fases ficam em `phases.tsv`; o relatório agrupa as métricas por elas.
 
@@ -1031,6 +1085,7 @@ XtraDB Cluster.
 | SIP | Criadas, sucesso, falhas por tipo, BYE remoto, fim do hold, pico de simultâneas, CPS, tempos INVITE -> 100 e -> 200, duração, falhas por motivo |
 | MySQL | Transações, queries, latência média e p95 do sysbench |
 | Web | req/s, latência média e p50/p90/p99, erros, por alvo |
+| Capacidade | Alertas e tabela `antes`/`pico`/`depois` dos limites e do uso de cada servidor (seção 7.7) |
 | Relógio | Diferença de cada servidor para a VM |
 | Servidores por fase | Uma tabela por servidor: métrica x fase |
 
@@ -1049,6 +1104,7 @@ memória disponível, CPU ociosa do FS) e `+` a variação de um contador.
 | `uas/` | Atendedor (com `UAS_PORT`): `stats.csv`, `errors.log`, `sipp.stderr`, `uas.xml` |
 | `web/`, `mysql/` | Saídas completas do `wrk` e do `sysbench` |
 | `snapshots/<host>-pre.txt`, `-post.txt` | Estado antes e depois (`status`, `lb_list`, réplica, PHP-FPM) |
+| `capacidade/`, `capacidade.csv`, `capacidade.txt` | Fotos de capacidade `antes`/`pico`/`depois` e a consolidação com alertas (seção 7.7) |
 | `guard.log` | Cada amostra acima de um limite |
 | `abort.txt` | Motivo da interrupção (só quando houve) |
 | `phases-start.tsv` | Início de cada fase, gravado na hora (usado pelo envio ao vivo) |
@@ -1214,6 +1270,16 @@ saturar, porque nesse caso os números deixam de representar os servidores.
 | `run_guarded` | Executa um comando de carga em segundo plano vigiando os limites |
 | `run_mysql_phase` | Cria o schema isolado, roda prepare/run/cleanup do sysbench |
 | `web_session_cookie`, `run_web_phase` | Obtém o cookie de sessão e roda o `wrk` em cada alvo |
+
+**Capacidade**
+
+| Função | O que faz |
+|---|---|
+| `capacity_args` | Argumentos do `lib/capacidade.sh` por papel (comando de status e disco) |
+| `capacity_collect` | Tira a foto de uma fase em todos os servidores em paralelo e na VM; grava `capacidade/<fase>-<host>.env` |
+| `capacity_pico_start`, `capacity_wait_pico` | Foto `pico` em segundo plano no fim da janela de envio e espera por ela antes do relatório |
+| `capacity_merge` | Junta as fotos em `capacidade.csv` e `capacidade.txt` e calcula os alertas |
+| `cmd_capacity` | Ação `capacidade`: foto avulsa, sem carga |
 
 **Opções, plano e ações**
 
