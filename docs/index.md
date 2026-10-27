@@ -1,59 +1,72 @@
-# sbc-sipp — Flux Loadtest
+# Flux Loadtest
 
-Ferramenta de teste de carga do FluxSBC, executada a partir de uma VM de teste.
-Gera tráfego SIP com SIPp, carga HTTP com wrk e, opcionalmente, carga MySQL com sysbench.
-Durante a execução, coleta métricas dos servidores por SSH e produz relatórios e dados brutos.
+Ferramenta de teste de carga do FluxSBC (WEB-1437). Roda numa **VM de teste** separada e atua nos
+servidores por SSH:
 
-## Componentes
+- gera carga SIP (INVITE para DIDs) com SIPp, com um segundo SIPp atendendo as chamadas;
+- gera carga HTTP no nginx + PHP-FPM com `wrk`;
+- opcionalmente, gera carga no MySQL com `sysbench`, em schema isolado;
+- coleta CPU, memória, rede, disco e métricas de cada serviço em todos os servidores, durante
+  todo o teste, sem instalar nem gravar nada neles;
+- gera um relatório `report.txt` por execução, com os dados brutos ao lado, e opcionalmente envia
+  tudo ao Zabbix.
 
-| Caminho | Responsabilidade |
-| --- | --- |
-| `flux-loadtest.sh` | Orquestra configuração de chaves, verificações, smoke tests, carga e relatórios. |
-| `lib/` | Coleta de métricas e integração com Zabbix. |
-| `scenarios/` | Modelos SIPp de originador e atendedor de chamadas. |
-| `profiles/` | Exemplos de perfis de carga. |
-| `install/` | Instalação e preparação dos servidores por papel. |
-| `lab/` | Laboratórios Docker e VMs Debian 12. |
-| `deploy/` | Runbooks, configurações e scripts específicos do ambiente STFC. |
-| `zabbix/` e `bin/flux-loadtest-zbx` | Templates e disparo de perfis pelo Zabbix. |
+!!! warning "Produção"
+    O ambiente STFC atende clientes reais. Toda execução exige `--confirm-prod`, pede a palavra
+    `PRODUCAO` no terminal e é vigiada por limites de segurança (guard) que param a carga de forma
+    suave. Use `--dry-run` para revisar o plano antes.
 
-## Fluxo geral
+## Por onde começar
 
-1. Preparar a VM de teste e os acessos aos servidores.
-2. Configurar os destinos, DIDs e o perfil de carga.
-3. Conferir conectividade e executar um smoke test.
-4. Executar a carga com coleta de métricas e limites de segurança.
-5. Analisar o relatório, os dados brutos e as métricas no Zabbix, quando configurado.
+| Você é | Leia |
+|---|---|
+| Quem vai instalar e rodar os testes | [Arquitetura](arquitetura.md), [Instalação](instalacao/vm-teste.md), [Configuração](configuracao/loadtest-conf.md) e [Fluxo de um teste](execucao/fluxo.md) |
+| Quem vai executar uma campanha no STFC | [Runbook do STFC](execucao/runbook-stfc.md), [Degraus e perfis](execucao/degraus-e-perfis.md) e [Encerramento](execucao/encerramento.md) |
+| Quem vai analisar os resultados | [Como interpretar](resultados/como-interpretar.md) e [Leitura por equipe](resultados/por-equipe.md) |
+| Gestão, NOC, voz, banco, infra ou web | [Leitura por equipe](resultados/por-equipe.md), na seção da sua equipe |
+| Quem acompanha pelo Zabbix | [Dashboard do Zabbix](resultados/zabbix-dashboard.md) |
 
-O tráfego SIP pode passar pelo OpenSIPS e ser distribuído aos FreeSWITCH,
-ou ser enviado diretamente a um FreeSWITCH. A carga web cobre nginx e PHP-FPM;
-a carga ativa no banco é opcional.
+## Fluxo em cinco passos
 
-## Documentação existente
+1. **Preparar:** instalar o gerador, preparar os servidores (usuário de coleta, sudoers, credencial
+   do banco), criar a conta e os DIDs de teste e liberar a origem SIP.
+2. **Configurar:** `loadtest.conf`, chaves SSH (`keys setup`) e, se for usar, o Zabbix.
+3. **Validar:** `check` (somente leitura), `smoke` (uma chamada) e `run --dry-run` (plano).
+4. **Executar:** piloto e depois um degrau por execução, lendo o relatório antes de subir.
+5. **Analisar e encerrar:** interpretar o relatório, registrar o resultado e reverter as liberações.
 
-Os procedimentos detalhados permanecem nos documentos do repositório:
+## Componentes do repositório
 
-- [Guia principal](https://github.com/dpxdan/sbc-sipp/blob/master/README.md)
-- [Instalação e preparação](https://github.com/dpxdan/sbc-sipp/blob/master/install/README.md)
-- [Laboratório Docker](https://github.com/dpxdan/sbc-sipp/blob/master/lab/README.md)
-- [Laboratório em VMs](https://github.com/dpxdan/sbc-sipp/blob/master/lab/vm/README.md)
-- [Teste completo STFC](https://github.com/dpxdan/sbc-sipp/blob/master/deploy/stfc-completo/README.md)
+| Caminho | Função |
+|---|---|
+| `flux-loadtest.sh` | Orquestrador: `keys`, `check`, `smoke`, `run`, `report`, `zabbix`, `capacidade` |
+| `lib/collector.sh` | Coletor de métricas, enviado por SSH (`bash -s`) |
+| `lib/capacidade.sh` | Foto de limites e uso de cada servidor (antes, pico, depois) |
+| `lib/flux_zabbix.py` | Envio ao Zabbix (trapper) e provisionamento pela API |
+| `scenarios/` | Cenários SIPp: originador (`uac-did.xml.in`) e atendedor (`uas-answer.xml.in`) |
+| `profiles/` | Perfis de teste para o disparo pelo Zabbix |
+| `bin/flux-loadtest-zbx` | Wrapper chamado pelo zabbix-agentd para iniciar e parar perfis |
+| `zabbix/` | Templates do Zabbix 7.2 e o gerador deles |
+| `install/` | `flux-host.sh`: prepara servidores existentes ou instala o laboratório |
+| `lab/` | Laboratório STFC em Docker (`lab.sh`) ou em VMs (`lab/vm/vmlab.sh`) |
+| `deploy/stfc-completo/` | Runbook, SQL, scripts e resultados da campanha no STFC |
 
-## Editar e visualizar esta documentação
+## Editar esta documentação
 
 Na raiz do repositório:
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install mkdocs
+python3 -m venv .venv && . .venv/bin/activate && pip install -r docs/requirements.txt
+```
+
+```bash
 mkdocs serve
 ```
 
-Abra o endereço indicado pelo comando. Para gerar o site estático:
+Para gerar o site estático em `site/`:
 
 ```bash
 mkdocs build --strict
 ```
 
-Adicione novas páginas Markdown em `docs/` e registre-as em `nav` no `mkdocs.yml`.
+Páginas novas ficam em `docs/` e precisam entrar em `nav` no `mkdocs.yml`.

@@ -8,7 +8,7 @@ Roteiro para exibir os resultados do flux-loadtest no Zabbix que já existe, com
 3. envio ao vivo nos próximos testes (`ZABBIX_SERVER`);
 4. `zabbix-agent` no .165 para iniciar e parar perfis pelo menu do Zabbix.
 
-Detalhes de cada peça na seção 19 do `README.md` da raiz.
+Detalhes de cada peça em `docs/configuracao/zabbix.md` (documentação MkDocs).
 
 ## O dashboard
 
@@ -201,7 +201,7 @@ Perfis do STFC (deste diretório):
 | `stfc-c5000` | 5000 simultâneas a 10 CPS (hold de 500 s); exige limites maiores nos FS |
 
 O wrapper recusa CPS acima de 50 e janela acima de 3600 s
-(`/etc/flux-loadtest/zabbix-runner.conf`).
+(`/etc/flux-loadtest/zabbix-runner.conf`; exemplo em `profiles/zabbix-runner.conf.example`).
 
 ### Perfis de 3000 e 5000 simultâneas
 
@@ -259,7 +259,7 @@ opensips-cli -x mi lb_list | grep -E '"(uri|max|load)"'
 
 **Antes do `stfc-c5000`**, só depois de um `stfc-c3000` sem falhas, aplicar `150 7000` e
 conferir nos dois FS, porque o .162 chega a ~5500 sessões. A ação `capacidade` do
-`flux-loadtest.sh` (`README.md`, seção 7.7) faz todas as conferências abaixo de uma vez, sem
+`flux-loadtest.sh` (`docs/execucao/comandos.md`, `capacidade`) faz todas as conferências abaixo de uma vez, sem
 carga, e alerta o que estiver perto do limite ou com timeout de mídia menor que o hold:
 
 ```bash

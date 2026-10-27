@@ -149,8 +149,8 @@ desativa o host padrão "Zabbix server" (a imagem não tem agente). A configura�
 (`out/loadtest.conf`) já vem com `ZABBIX_*`, então todo `run` envia as amostras ao vivo.
 
 No frontend: *Monitoramento > Hosts*, grupo `Flux Loadtest`; os gráficos ficam em cada
-host (`lab-run` tem SIPp, wrk e sysbench). Detalhes dos templates na seção 19 do
-README principal.
+host (`lab-run` tem SIPp, wrk e sysbench). Detalhes dos templates em
+[`docs/configuracao/zabbix.md`](../docs/configuracao/zabbix.md).
 
 O histórico fica no volume `flux-stfc-lab_zbx-db-7.2.3-pg16` (um por versão do Zabbix e
 do PostgreSQL, porque nenhum dos dois volta de versão) e sobrevive ao `down`; para
@@ -176,7 +176,7 @@ mais do histórico.
 | Item | Laboratório | Motivo |
 |---|---|---|
 | Perfil `lab-mac` (5080) e socket 5062 do OpenSIPS | Só no laboratório | Mídia e sinalização alcançáveis pelo macOS (Docker Desktop não roteia para os IPs dos containers) |
-| Atendedor na vm-teste (5090) | DIDs do teste DIRECT-IP para a própria VM originadora | Em produção, a mesma configuração (seção 6.6 do README), com o IP público da VM |
+| Atendedor na vm-teste (5090) | DIDs do teste DIRECT-IP para a própria VM originadora | Em produção, a mesma configuração ([`docs/instalacao/massa-dids.md`](../docs/instalacao/massa-dids.md)), com o IP público da VM |
 | `dispatcher` setid 2 | Aponta para o 5080 | Registros dos devices no perfil `lab-mac` |
 | `system.opensips*` | Grupo `opensips` | No schema 6.4 estão em `signup`, e o PHP só lê `global`, `opensips`...; sem isso a ACL não libera o OpenSIPS. Conferir na base de produção |
 | `pxc_strict_mode` | `PERMISSIVE`, `sql_mode=""` | Seis tabelas do Flux (`cdrs`, `cdrs_staging`, `reseller_cdrs`...) não têm chave primária e o modo `ENFORCING` recusa gravar nelas. Conferir no PXC de produção |
@@ -322,7 +322,7 @@ O relatório fica em `out/results/` (no Mac) e em `/var/lib/flux-loadtest/result
 flux-sipdevice-routing.lua` (failover) e `leave_voicemail`. O
 `flux-sipdevice-routing.lua` (igual nos dois) chama `session:hangup()` sempre que o
 bridge não termina em `SUCCESS`, então o `leave_voicemail` nunca executa: o chamador
-recebe 480 (`USER_NOT_REGISTERED`). A premissa da seção 6.6 do README (ramal não
+recebe 480 (`USER_NOT_REGISTERED`). A premissa inicial do teste (ramal não
 registrado com `vm-enabled` atende pela caixa postal) não vale para esses scripts.
 
 **DID para ramal registrado depende do nó.** O REGISTER do device passa pelo
@@ -332,8 +332,9 @@ ramal registrou. No outro FS, o `bridge user/RAMAL@dominio` termina em
 `USER_NOT_REGISTERED`. Como o laboratório usa o mesmo `opensips.cfg` e os mesmos scripts,
 o comportamento deve se repetir em produção.
 
-Por isso o teste de carga usa DIDs DIRECT-IP para o atendedor da vm-teste (seção 6.6 do
-README): o caminho não depende de registro nem de caixa postal.
+Por isso o teste de carga usa DIDs DIRECT-IP para o atendedor da vm-teste
+([`docs/instalacao/massa-dids.md`](../docs/instalacao/massa-dids.md)): o caminho não
+depende de registro nem de caixa postal.
 
 ## Validação do Zabbix (2026-10-14)
 

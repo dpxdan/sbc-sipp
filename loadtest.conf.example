@@ -188,7 +188,7 @@ ZABBIX_API_URL=
 # Token de API num arquivo 0600 (Users > API tokens). Permissao de escrita em hosts.
 ZABBIX_API_TOKEN_FILE=
 ZABBIX_TLS_INSECURE=0
-# Disparo de perfis pela interface do Zabbix (README, secao 19.6). IP do zabbix-agentd desta
+# Disparo de perfis pela interface do Zabbix (docs/configuracao/zabbix.md). IP do zabbix-agentd desta
 # VM: o host <prefixo>gen ganha a interface agent e o template "Flux Loadtest - Disparo".
 ZABBIX_GEN_AGENT=
 # Grupo de usuarios do Zabbix que pode executar os scripts (vazio = todos com escrita no host)

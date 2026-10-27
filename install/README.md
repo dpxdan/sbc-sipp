@@ -11,7 +11,7 @@ servidor (ou copiado) e o comando é executado lá.
 | `mysql` | `banco-master-sbc-stfc`, `banco-slave-stfc` | Percona XtraDB Cluster 8.4.10 + keepalived (VIP) |
 | `web` | `sbc-stfc-interfaceweb` | nginx 1.22.1 + PHP-FPM 7.3 |
 | `gen` | servidor de testes | SIPp, wrk, sysbench, limites de rede e o `loadtest.conf` |
-| `zabbix-agent` | servidor de testes (só `prepare`/`check`) | zabbix-agentd e o wrapper do disparo de perfis pelo Zabbix (README principal, seção 19.6) |
+| `zabbix-agent` | servidor de testes (só `prepare`/`check`) | zabbix-agentd e o wrapper do disparo de perfis pelo Zabbix ([`docs/configuracao/zabbix.md`](../docs/configuracao/zabbix.md)) |
 
 Vários papéis no mesmo servidor: `flux-host.sh lab freeswitch opensips`.
 
@@ -118,8 +118,10 @@ Web: o `server` em `127.0.0.1:80` recebe todo o tráfego local para `127.0.0.1:8
 no servidor depende desse endereço para chegar à aplicação, não use `--apply-status`. Com mais
 de um pool no PHP-FPM, o `fpm-status` fica de fora (configure à mão).
 
-Depois do `prepare`, as etapas do README principal continuam valendo: origem SIP autorizada
-no OpenSIPS (6.3), DIDs de teste (6.6) e `keys setup` (6.1).
+Depois do `prepare`, continuam valendo: origem SIP autorizada no OpenSIPS
+([`docs/instalacao/servidores.md`](../docs/instalacao/servidores.md)), DIDs de teste
+([`docs/instalacao/massa-dids.md`](../docs/instalacao/massa-dids.md)) e `keys setup`
+([`docs/configuracao/chaves-ssh.md`](../docs/configuracao/chaves-ssh.md)).
 
 ## `check`
 

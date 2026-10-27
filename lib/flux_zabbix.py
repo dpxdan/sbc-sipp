@@ -13,7 +13,7 @@ Subcomandos:
   bootstrap         (laboratorio) troca a senha inicial do Admin e cria um token de API.
 
 Somente biblioteca padrao do Python 3.9+ (Debian 12: 3.11). Chamado pelo
-flux-loadtest.sh; ver "flux-loadtest.sh zabbix --help" e a secao Zabbix do README.
+flux-loadtest.sh; ver "flux-loadtest.sh zabbix --help" e docs/configuracao/zabbix.md.
 
 O que vai para cada chave esta descrito em zabbix/gen_templates.py.
 """

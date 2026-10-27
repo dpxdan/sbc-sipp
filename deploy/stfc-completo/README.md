@@ -20,8 +20,8 @@ como operadora no OpenSIPS. O caminho é o das chamadas reais:
 | banco-master-sbc-stfc | 200.159.177.161 | 172.17.4.161 | Coleta passiva (PXC) e escrita da massa de teste |
 | banco-slave-stfc | 200.159.177.164 | 172.17.4.164 | Coleta passiva (PXC) |
 
-Diferença em relação ao `deploy/stfc-fs02/` (primeiro teste, direto no FS do .162): aqui
-o .165 é liberado **no OpenSIPS** (tabela `address`), e não na ACL do FreeSWITCH. A
+Diferença em relação ao primeiro teste (direto no FS do .162, `docs/execucao/fs-direto.md`):
+aqui o .165 é liberado **no OpenSIPS** (tabela `address`), e não na ACL do FreeSWITCH. A
 `acl_lb_networks` não muda e o `reloadacl` não é necessário.
 
 Arquivos deste diretório:

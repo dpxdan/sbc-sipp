@@ -1,9 +1,82 @@
-site_name: sbc-sipp — Flux Loadtest
-site_description: Documentação dos testes de carga do FluxSBC
+site_name: Flux Loadtest
+site_description: Teste de carga do FluxSBC - instalação, configuração, execução e interpretação dos resultados
 repo_url: https://github.com/dpxdan/sbc-sipp
+repo_name: dpxdan/sbc-sipp
+edit_uri: edit/master/docs/
 docs_dir: docs
 site_dir: site
+
+validation:
+  anchors: warn
+  unrecognized_links: warn
+
+theme:
+  name: material
+  language: pt-BR
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Modo escuro
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Modo claro
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.highlight
+    - content.code.copy
+    - toc.follow
+
+plugins:
+  - search:
+      lang: pt
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+
 nav:
   - Início: index.md
-theme:
-  name: mkdocs
+  - Arquitetura: arquitetura.md
+  - Instalação:
+      - VM de teste (gerador): instalacao/vm-teste.md
+      - Servidores: instalacao/servidores.md
+      - Conta e DIDs de teste: instalacao/massa-dids.md
+      - Laboratório: instalacao/laboratorio.md
+  - Configuração:
+      - loadtest.conf: configuracao/loadtest-conf.md
+      - Chaves SSH: configuracao/chaves-ssh.md
+      - Zabbix: configuracao/zabbix.md
+  - Execução:
+      - Fluxo de um teste: execucao/fluxo.md
+      - Comandos e opções: execucao/comandos.md
+      - Degraus e perfis: execucao/degraus-e-perfis.md
+      - Runbook do STFC: execucao/runbook-stfc.md
+      - FreeSWITCH direto: execucao/fs-direto.md
+      - Encerramento e reversão: execucao/encerramento.md
+  - Resultados:
+      - Arquivos e relatório: resultados/arquivos.md
+      - Métricas coletadas: resultados/metricas.md
+      - Como interpretar: resultados/como-interpretar.md
+      - Leitura por equipe: resultados/por-equipe.md
+      - Dashboard do Zabbix: resultados/zabbix-dashboard.md
+      - "Estudo de caso: 21/10/2026": resultados/estudo-de-caso-2026-10-21.md
+      - Modelo de registro: resultados/modelo-de-registro.md
+  - Referência:
+      - Solução de problemas: referencia/solucao-de-problemas.md
+      - Segurança: referencia/seguranca.md
+      - Limitações: referencia/limitacoes.md
+      - Glossário: referencia/glossario.md
