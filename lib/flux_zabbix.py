@@ -753,9 +753,12 @@ def svggraph(name, x, y, datasets, w=DASH_COLS // 2, h=5):
 
 def problems_widget(name, x, y, h, gid, lines):
     """Problemas do grupo Flux Loadtest. show_suppressed: os hosts flt-* ficam numa manutencao com
-    coleta (sem alertas ao suporte) e, sem ele, os problemas do teste nao aparecem no widget."""
+    coleta (sem alertas ao suporte) e, sem ele, os problemas do teste nao aparecem no widget.
+    show 2 (historico): os gatilhos recuperam por nodata no fim do teste e, no modo padrao (recentes),
+    sumiriam do dashboard minutos depois; o historico mantem os resolvidos para ler a execucao."""
     return {"type": "problems", "name": name, "x": x, "y": y, "width": DASH_COLS, "height": h, "view_mode": 0,
-            "fields": [wfield(WF_GROUP, "groupids.0", gid), wfield(WF_INT, "show_lines", lines),
+            "fields": [wfield(WF_GROUP, "groupids.0", gid), wfield(WF_INT, "show", 2),
+                       wfield(WF_INT, "show_lines", lines),
                        wfield(WF_INT, "show_suppressed", 1), wfield(WF_INT, "show_tags", 3),
                        wfield(WF_STR, "tag_priority", "componente,tipo"), wfield(WF_INT, "show_opdata", 1)]}
 
@@ -779,14 +782,14 @@ def dashboard_pages(p, gid, result_items):
         svggraph("Falhas e retransmissoes por periodo", half, 12,
                  [([run], ["SIPp: falhas no periodo (% das encerradas)"], "F63100", 0),
                   ([run], ["SIPp: retransmissoes no periodo"], "A54F10", 1)]),
-        problems_widget("Problemas do teste de carga", 0, 17, 4, gid, 10),
+        problems_widget("Problemas do teste de carga", 0, 17, 4, gid, 25),
     ]
     # Gargalos: problema (gatilho tipo=gargalo ou sintoma) e, por componente, a carga contra o sintoma.
     # Leitura no ZABBIX.md (deploy/stfc-completo), secao "Onde esta o gargalo".
     fs, os_, db = p + "fs*", p + "opensips*", p + "db*"
     gargalos = [
         problems_widget("Gargalos e sintomas (tags componente e tipo; inclui os suprimidos pela manutencao)",
-                        0, 0, 6, gid, 25),
+                        0, 0, 6, gid, 50),
         svggraph("SIP: INVITE -> 200 (esq.) x chamadas simultaneas (dir.)", 0, 6,
                  [([run], ["SIPp: INVITE -> 200*"], "F63100", 0),
                   ([run], ["SIPp: chamadas simultaneas"], "2774A4", 1)]),

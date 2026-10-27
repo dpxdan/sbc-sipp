@@ -64,4 +64,6 @@ por host.
   o contador sobe entre duas amostras.
 - `{$FLT.DB.RUNNING.MAX}` deve ser ajustado ao número de núcleos do banco.
 - Os problemas se recuperam quando o valor volta ao normal ou quando os dados param por
-  `{$FLT.NODATA}` (5 min, fim do teste).
+  `{$FLT.NODATA}` (5 min, fim do teste). Os widgets de problemas das páginas Resultados e Gargalos
+  ficam no modo histórico: os resolvidos continuam listados (status RESOLVED), com a hora de início e
+  de fim, para comparar com a linha da execução na tabela de resultados.
