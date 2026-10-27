@@ -104,6 +104,28 @@ python3 /opt/flux-loadtest/deploy/stfc-completo/pdd-pcap.py /root/degrau.pcap --
 Um FS com total p90 muito maior que o outro, com a mesma carga, aponta para o nó, não para o banco
 ou o OpenSIPS.
 
+Para separar o tempo **dentro** desse FS do tempo no OpenSIPS e na rede, capture no próprio FS durante
+o patamar e use o modo `--fs`:
+
+```bash
+timeout 300 tcpdump -i ens192 -nn -s0 -w /root/fs2.pcap 'udp port 5070'
+```
+
+```bash
+python3 /opt/flux-loadtest/deploy/stfc-completo/pdd-pcap.py /root/fs2.pcap --fs 200.159.177.162:5070 --faixa 60
+```
+
+| Trecho | Do | Até | Inclui |
+|---|---|---|---|
+| Trying | INVITE da perna A recebido | 100 Trying enviado | Fila do sofia-sip |
+| Dialplan | INVITE da perna A recebido | INVITE do bridge enviado | Dialplan Lua + MySQL, criação da perna B |
+| Fora | INVITE do bridge enviado | 200 da perna B recebido | OpenSIPS, atendedor e rede |
+| Atende | 200 da perna B recebido | 200 da perna A enviado | O FS atendendo a perna A (estado do canal, core db) |
+| Total | INVITE da perna A recebido | 200 da perna A enviado | Tudo dentro do FS, mais o trecho de fora |
+
+O relatório também conta as chamadas com INVITE da perna A retransmitido pelo OpenSIPS, sinal de que o
+FS demorou a responder o 100 Trying.
+
 ## 4. Onde está o gargalo?
 
 Compare as fases na tabela "Servidores por fase": o que muda de `baseline` para `sip` é o custo do

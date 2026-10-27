@@ -13,6 +13,17 @@ Uso (no .165, somente leitura):
   python3 pdd-pcap.py /root/degrau.pcap [--gen 200.159.177.165] [--uas-port 5090] [--faixa 20]
 
 Captura: tcpdump -i ens192 -nn -s0 -w /root/degrau.pcap 'udp port 5060 or udp port 5090'
+
+Modo --fs IP:PORTA: captura feita no proprio FreeSWITCH, para separar o tempo dentro dele. A perna A
+(OpenSIPS -> FS) e a perna B (bridge, FS -> OpenSIPS) passam pelo mesmo socket e casam pelo DID:
+  trying    INVITE A recebido  ate  100 Trying enviado (fila do sofia-sip)
+  dialplan  INVITE A recebido  ate  INVITE B enviado (dialplan Lua + MySQL, criacao da perna B)
+  fora      INVITE B enviado   ate  200 B recebido (OpenSIPS, atendedor e rede)
+  atende    200 B recebido     ate  200 A enviado (o FS atende a perna A)
+  total     INVITE A recebido  ate  200 A enviado
+  python3 pdd-pcap.py /root/fs2.pcap --fs 200.159.177.162:5070 [--faixa 60]
+Captura no FS: tcpdump -i ens192 -nn -s0 -w /root/fs2.pcap 'udp port 5070'
+
 So biblioteca padrao (le pcap Ethernet ou Linux cooked, IPv4/UDP, com ou sem VLAN).
 """
 
@@ -90,13 +101,92 @@ def resumo(nome, values):
             f"  p99={pct(ms, 99):8.1f}  max={max(ms):8.1f} ms")
 
 
+def sip_did(pl):
+    """(linha inicial, metodo do CSeq, DID) de uma mensagem SIP; DID da R-URI no INVITE, do To nas respostas."""
+    first = pl.split(b"\r\n", 1)[0]
+    cseq = RE_CSEQ.search(pl)
+    method = cseq.group(1).upper() if cseq else b""
+    m = RE_RURI.match(first) if first.startswith(b"INVITE ") else RE_TO.search(pl)
+    return first, method, (m.group(1).decode(errors="replace") if m else None)
+
+
+def modo_fs(a):
+    """Tempos dentro do FreeSWITCH, com a captura feita nele (veja o cabecalho)."""
+    fs_ip, _, fs_port = a.fs.rpartition(":")
+    if not fs_ip or not fs_port.isdigit():
+        raise SystemExit(f"--fs invalido (use IP:PORTA): {a.fs}")
+    fs_port = int(fs_port)
+    a_inv, a_100, b_inv, b_200, a_200 = {}, {}, {}, {}, {}
+    retrans = defaultdict(int)
+    for ts, src, sport, dst, dport, pl in packets(a.pcap):
+        entra = dst == fs_ip and dport == fs_port
+        sai = src == fs_ip and sport == fs_port
+        if not (entra or sai):
+            continue
+        first, method, did = sip_did(pl)
+        if method != b"INVITE" or not did:
+            continue
+        if first.startswith(b"INVITE "):
+            if entra:
+                if did in a_inv:
+                    retrans[did] += 1                # mesma perna A de novo: o OpenSIPS retransmitiu
+                else:
+                    a_inv[did] = ts
+            elif did in a_inv and did not in b_inv:
+                b_inv[did] = ts                      # bridge saindo do FS
+        elif first.startswith(b"SIP/2.0 100") and sai and did in a_inv:
+            a_100.setdefault(did, ts)
+        elif first.startswith(b"SIP/2.0 200"):
+            if entra and did in b_inv:
+                b_200.setdefault(did, ts)            # 200 da perna B
+            elif sai and did in b_200:
+                a_200.setdefault(did, ts)            # 200 do FS para a perna A
+
+    dids = [d for d in a_inv if d in a_100 and d in b_inv and d in b_200 and d in a_200]
+    if not dids:
+        print(f"nenhuma chamada completa na captura (confira --fs {a.fs} e o filtro do tcpdump)")
+        return 1
+    inicio = min(a_inv[d] for d in dids)
+    n_ret = sum(1 for d in dids if retrans[d])
+    print(f"captura {a.pcap} no FS {a.fs}: {len(a_inv)} INVITE da perna A, {len(dids)} chamadas completas,"
+          f" {n_ret} com INVITE retransmitido pelo OpenSIPS\n")
+
+    nomes = ("trying", "dialplan", "fora", "atende", "total")
+    total = defaultdict(list)
+    por_faixa = defaultdict(lambda: defaultdict(list))
+    for d in dids:
+        v = dict(zip(nomes, (a_100[d] - a_inv[d], b_inv[d] - a_inv[d], b_200[d] - b_inv[d],
+                             a_200[d] - b_200[d], a_200[d] - a_inv[d])))
+        for g in (total, por_faixa[int((a_inv[d] - inicio) // a.faixa)]):
+            for k in nomes:
+                g[k].append(v[k])
+    print("== Tempos por chamada")
+    for k in nomes:
+        print(resumo(k, total[k]))
+    print(f"\n== Por faixa de {a.faixa} s desde o primeiro INVITE (com CPS constante, as simultaneas sobem)")
+    print(f"  {'faixa':<12} {'chamadas':>8} {'CPS':>6} {'trying p90':>11} {'dialplan p90':>13}"
+          f" {'fora p90':>9} {'atende p50':>11} {'atende p90':>11} {'total p90':>10}")
+    for b in sorted(por_faixa):
+        g = por_faixa[b]
+        print(f"  {b * a.faixa:>4}-{(b + 1) * a.faixa:<6}s {len(g['total']):>8} {len(g['total']) / a.faixa:>6.1f}"
+              f" {pct(g['trying'], 90) * 1000:>9.0f}ms {pct(g['dialplan'], 90) * 1000:>11.0f}ms"
+              f" {pct(g['fora'], 90) * 1000:>7.0f}ms {statistics.median(g['atende']) * 1000:>9.0f}ms"
+              f" {pct(g['atende'], 90) * 1000:>9.0f}ms {pct(g['total'], 90) * 1000:>8.0f}ms")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("pcap")
     ap.add_argument("--gen", default="200.159.177.165", help="IP do gerador (originador e atendedor)")
     ap.add_argument("--uas-port", type=int, default=5090)
+    ap.add_argument("--fs", help="IP:PORTA do FreeSWITCH: captura feita no proprio FS (tempos dentro dele)")
     ap.add_argument("--faixa", type=int, default=20, help="tamanho da faixa de tempo, em segundos")
     a = ap.parse_args()
+    if a.faixa < 1:
+        raise SystemExit("--faixa minimo: 1")
+    if a.fs:
+        return modo_fs(a)
 
     t0, t1, t2, t3, node = {}, {}, {}, {}, {}
     for ts, src, sport, dst, dport, pl in packets(a.pcap):
