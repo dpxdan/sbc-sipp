@@ -78,6 +78,7 @@ equivalem às opções do `run`).
 | `stfc-piloto` | 10 CPS por 60 s, hold 10 s | ~6 min | — |
 | `stfc-cps20` | 10 a 20 CPS em 40 s (+5 a cada 20 s), janela 240 s, hold 20 s | ~9 min | — |
 | `stfc-cps30` | 10 a 30 CPS em 80 s (+5 a cada 20 s), ~220 s em 30 CPS, hold 30 s (~900 simultâneas) | ~10 min | `150 1300` |
+| `stfc-cps-escada50` | Escada de 10 a 50 CPS (+5 a cada 60 s), mais 120 s em 50, hold 10 s (~600 simultâneas) | ~16 min | `150 1300` |
 | `stfc-c1000` | 1000 simultâneas a 10 CPS (janela 150 s, hold 100 s) | ~9 min | — |
 | `stfc-c1000-rtp` | Igual ao `stfc-c1000`, com `MEDIA=rtp` (G.711 nos dois sentidos) | ~9 min | — |
 | `stfc-c2000` | 2000 simultâneas a 10 CPS (janela 320 s, hold 200 s, 120 s no patamar, `-l` 2448) | ~13 min | `150 2800` |
@@ -90,7 +91,7 @@ na mesma carga. Ele exige DIDs com `bypass_media = 0` (veja [Conta e DIDs de tes
 e coloca ~180 Mbit/s por sentido no gerador.
 
 Ordem recomendada: `stfc-piloto` -> `stfc-c1000` -> `stfc-c2000` -> `stfc-c3000` -> `stfc-c5000` (só depois de um
-`stfc-c3000` sem falhas) e, separadamente, `stfc-cps20` -> `stfc-cps30`.
+`stfc-c3000` sem falhas) e, separadamente, `stfc-cps20` -> `stfc-cps30` -> `stfc-cps-escada50`.
 
 Antes de perfis longos, tire uma foto de capacidade com o hold planejado. Ela alerta timeout de mídia
 menor que o hold (com `MEDIA=none` não há RTP e as chamadas cairiam), memória, threads e portas RTP:
@@ -108,6 +109,79 @@ Conferências manuais equivalentes:
 | Portas RTP | `grep -E 'rtp-(start\|end)-port' /etc/freeswitch/autoload_configs/switch.conf.xml` | Padrão 16384-32768 (~8 mil sessões RTP) |
 | Timeout de mídia | `grep -rE 'rtp-timeout-sec\|media_timeout' /etc/freeswitch` | Precisa ser maior que o hold com `MEDIA=none` |
 | Memória do OpenSIPS | `opensips-cli -x mi get_statistics shmem:` | 21,7% com 1962 diálogos |
+
+## Encontrar o limite de CPS
+
+Objetivo: o maior CPS com atraso aceitável e o componente que limita. O degrau de 21/10 misturou CPS
+com chamadas simultâneas (hold longo), e o atraso do `.162` cresce com as simultâneas. Por isso a escada
+usa hold de 10 s: simultâneas ≈ CPS x (10 s + PDD), ~600 em 50 CPS.
+
+Em produção, o atraso atinge também as chamadas reais, sem gerar falha SIP. Use `GUARD_MAX_PDD_MS=2000`
+no `loadtest.conf`: o guard para a carga quando o INVITE -> 200 médio do período passa de 2 s por
+`GUARD_HITS` amostras seguidas, e o patamar em que ele parou é o limite.
+
+### 1. Escada até 50 CPS pelo OpenSIPS
+
+Perfil `stfc-cps-escada50`, pelo menu do Zabbix ou à mão. Antes, nos dois FS:
+
+```bash
+bash /opt/flux-loadtest/deploy/stfc-completo/fs-limites.sh aplicar 150 1300
+```
+
+Durante toda a janela, capture no gerador e no `.162`:
+
+```bash
+tcpdump -i ens192 -nn -s0 -w /root/escada-gen.pcap 'udp port 5060 or udp port 5090'
+```
+
+```bash
+tcpdump -i ens192 -nn -s0 -w /root/escada-fs2.pcap 'udp port 5070'
+```
+
+Leitura, com faixas de 60 s iguais aos patamares:
+
+```bash
+python3 /opt/flux-loadtest/deploy/stfc-completo/pdd-pcap.py /root/escada-gen.pcap --faixa 60
+```
+
+```bash
+python3 /opt/flux-loadtest/deploy/stfc-completo/pdd-pcap.py /root/escada-fs2.pcap --fs 200.159.177.162:5070 --faixa 60
+```
+
+| Resultado | Leitura |
+|---|---|
+| Último patamar com total p90 abaixo de 1 s e falha 0 | CPS sustentável |
+| Patamar em que o guard parou | Limite (atraso ou falha) |
+| Total p90 muito maior em um FS | O nó limita; o modo `--fs` mostra o trecho dentro dele |
+| Problema na página Gargalos no horário do patamar | Componente que passou do limite (CPU do `.163`, banco, `load_balancer`) |
+
+Depois, nos dois FS: `fs-limites.sh restaurar`.
+
+### 2. Acima de 50 CPS
+
+Só se a escada chegar a 50 CPS sem degradar. O menu do Zabbix recusa perfis acima de `ZBX_MAX_CPS`
+(50), então o disparo é pela linha de comando, depois de `fs-limites.sh aplicar 250 2000` nos dois FS:
+
+```bash
+./flux-loadtest.sh run -c /etc/flux-loadtest/loadtest.conf --confirm-prod -t sip -r 100 --cps-start 50 --ramp-step 10 --ramp-interval 60 -w 480 -H 10 -M none --label stfc-cps-escada100
+```
+
+### 3. Isolar o nó, sem OpenSIPS
+
+Com o limite encontrado, repita a escada direto em cada FS ([FreeSWITCH direto](fs-direto.md)):
+`SIP_TARGET` no IP:5070 do nó e o gerador liberado no `acl_lb_networks` dele.
+
+| Resultado | Limite |
+|---|---|
+| `.163` sozinho sustenta mais que o sistema e o `.162`, menos | `.162` |
+| Os dois sozinhos sustentam mais que o sistema | OpenSIPS ou `load_balancer` (A15) |
+| Os dois param no mesmo ponto | Componente comum: banco ou gerador |
+
+### 4. Core db do `.162`
+
+Se o `.162` for o limite, repita a escada antes e depois de trocar o core db dele (PXC, como o `.163`,
+ou `core.db` em tmpfs). A troca exige restart do FS; use a mesma janela do restart que aplica o `sps`
+do `switch.conf`.
 
 ## Criar um perfil
 
