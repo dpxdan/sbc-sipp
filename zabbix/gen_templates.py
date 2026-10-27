@@ -80,6 +80,9 @@ SYS_ITEMS = [
     it("net_tx_pps", "Pacotes enviados", "pps"),
     it("udp_in_err_s", "Erros de entrada UDP", "/s"),
     it("udp_rcvbuf_err_s", "Erros de buffer de recepcao UDP", "/s"),
+    it("net_rx_drop_s", "Descartes na interface (recepcao)", "pps",
+       desc="Pacotes descartados pela placa ou pelo kernel antes da pilha IP (/proc/net/dev, sem lo)."),
+    it("net_tx_drop_s", "Descartes na interface (envio)", "pps"),
     it("disk_rd_kbs", "Disco leitura", "Bps", "1024"),
     it("disk_wr_kbs", "Disco escrita", "Bps", "1024"),
     it("disk_busy_pct", "Disco ocupado", "%"),
@@ -92,6 +95,9 @@ def proc_items(proc, label):
         it(f"{proc}_cpu_pct", f"{label}: CPU (100 = 1 nucleo)", "%"),
         it(f"{proc}_rss_mb", f"{label}: memoria RSS", "B", "1048576"),
         it(f"{proc}_threads", f"{label}: threads", "", None, "U"),
+        it(f"{proc}_max_thread_pct", f"{label}: thread mais carregada (100 = 1 nucleo)", "%",
+           desc="CPU da thread (ou do processo, no OpenSIPS e no PHP-FPM) que mais trabalhou no intervalo. "
+                "Perto de 100 = gargalo de uma thread so, mesmo com CPU total baixa."),
     ]
 
 
@@ -100,6 +106,13 @@ FS_ITEMS = proc_items("freeswitch", "FreeSWITCH") + [
     it("fs_sessions", "FreeSWITCH: sessoes", "", None, "U"),
     it("fs_sps", "FreeSWITCH: sessoes por segundo", "", None, "U"),
     it("fs_idle_cpu", "FreeSWITCH: CPU ociosa (min idle cpu)", "%"),
+    it("fs_api_ms", "FreeSWITCH: tempo de resposta do fs_cli (status)", "ms",
+       desc="Tempo do fs_cli -x status (nucleo e event socket, sem banco), com ~10-30 ms do proprio fs_cli."),
+    it("fs_db_probe_ms", "FreeSWITCH: tempo do show calls count (banco interno)", "ms",
+       desc="Consulta ao core db. Sobe quando faltam handles de banco (max-db-handles, db-handle-timeout) "
+            "ou o banco do core esta lento, mesmo com o status rapido."),
+    it("fs_max_sessions", "FreeSWITCH: max_sessions em uso", "", None, "U"),
+    it("fs_sessions_pct", "FreeSWITCH: sessoes (% do max_sessions)", "%"),
 ]
 
 OS_ITEMS = proc_items("opensips", "OpenSIPS") + [
@@ -111,6 +124,8 @@ OS_ITEMS = proc_items("opensips", "OpenSIPS") + [
     it("os_drop_req_total", "OpenSIPS: requisicoes descartadas (acumulado)", "", None, "U"),
     it("os_shm_used_pct", "OpenSIPS: memoria compartilhada usada", "%"),
     it("os_load", "OpenSIPS: load", "%"),
+    it("os_lb_max_pct", "OpenSIPS: destino do load_balancer mais cheio", "%",
+       desc="Maior load/max entre os destinos do lb_list. Perto de 100 = 503 No FreeSWITCH Available."),
 ]
 
 DB_ITEMS = proc_items("mysqld", "MySQL") + [
@@ -132,6 +147,9 @@ DB_ITEMS = proc_items("mysqld", "MySQL") + [
     it("db_wsrep_state", "PXC: estado do no", "", None, "U", valuemap="Flux Loadtest - wsrep state"),
     it("db_wsrep_primary", "PXC: componente Primary", "", None, "U", valuemap="Flux Loadtest - sim/nao"),
     it("db_vip", "PXC: VIP do keepalived neste no", "", None, "U", valuemap="Flux Loadtest - sim/nao"),
+    it("db_stmt_avg_ms", "MySQL: latencia media das consultas", "ms",
+       desc="Media do intervalo, todas as sessoes (performance_schema). Vazio sem SELECT em performance_schema."),
+    it("db_conn_pct", "MySQL: conexoes (% do max_connections)", "%"),
 ]
 
 WEB_ITEMS = proc_items("nginx", "nginx") + proc_items("php_fpm", "PHP-FPM") + [
@@ -346,7 +364,16 @@ def trigger_block(y, indent, tpl, t):
     tags_block(y, indent + 1, t.get("tags", [("scope", "loadtest")]))
 
 
-def guard(tpl, key, op, macro, name, priority="HIGH", hits=3, desc=""):
+def ttags(comp, kind="gargalo"):
+    """Tags dos gatilhos: scope (filtro das acoes de notificacao), componente e tipo.
+    tipo=gargalo aponta o recurso que limita o teste; tipo=sintoma e o efeito visto pelo SIPp."""
+    t = [("scope", "loadtest")]
+    if comp:
+        t += [("componente", comp), ("tipo", kind)]
+    return t
+
+
+def guard(tpl, key, op, macro, name, priority="HIGH", hits=3, desc="", comp=None, kind="gargalo"):
     """Gatilho no padrao do guard do flux-loadtest: N amostras seguidas fora do limite.
     Recupera quando volta ao normal ou quando os dados param (fim do teste)."""
     ref = f"/{tpl}/{key}"
@@ -357,7 +384,24 @@ def guard(tpl, key, op, macro, name, priority="HIGH", hits=3, desc=""):
         expr = f"max({ref},#{hits})<{macro}"
         rec = f"min({ref},#{hits})>={macro} or nodata({ref},{{$FLT.NODATA}})=1"
     return {"expr": expr, "recovery": rec, "name": name, "priority": priority,
-            "opdata": "{ITEM.LASTVALUE1}", "desc": desc}
+            "opdata": "{ITEM.LASTVALUE1}", "desc": desc, "tags": ttags(comp, kind)}
+
+
+def increase(tpl, key, name, priority="WARNING", desc="", comp=None, kind="gargalo"):
+    """Gatilho de contador acumulado: subiu entre as duas ultimas amostras. Recupera depois de
+    6 amostras sem aumento ou quando os dados param."""
+    ref = f"/{tpl}/{key}"
+    return {"expr": f"max({ref},#2)-min({ref},#2)>0",
+            "recovery": f"max({ref},#6)-min({ref},#6)=0 or nodata({ref},{{$FLT.NODATA}})=1",
+            "name": name, "priority": priority, "opdata": "{ITEM.LASTVALUE1}", "desc": desc,
+            "tags": ttags(comp, kind)}
+
+
+def thread_trigger(tpl, proc, label, comp, priority="AVERAGE"):
+    return guard(tpl, f"flt.app[{proc}_max_thread_pct]", ">", "{$FLT.THREAD.MAX}",
+                 f"{label}: uma thread acima de {{$FLT.THREAD.MAX}}% de um nucleo em {{HOST.NAME}}", priority,
+                 desc="Gargalo de thread unica: o processo fica lento mesmo com CPU total sobrando "
+                      "(loop do sofia-sip, worker do OpenSIPS, thread do MySQL, SIPp).", comp=comp)
 
 
 def graph(tpl, name, keys, gtype=None):
@@ -373,14 +417,22 @@ def build():
     # ---------------- Sistema
     sys_trig = {
         "cpu_pct": [guard(T_SYS, "flt.sys[cpu_pct]", ">", "{$FLT.CPU.MAX}",
-                          "CPU acima de {$FLT.CPU.MAX}% por 3 amostras em {HOST.NAME}")],
+                          "CPU acima de {$FLT.CPU.MAX}% por 3 amostras em {HOST.NAME}", comp="cpu")],
         "mem_used_pct": [guard(T_SYS, "flt.sys[mem_used_pct]", ">", "{$FLT.MEM.MAX}",
-                               "Memoria acima de {$FLT.MEM.MAX}% por 3 amostras em {HOST.NAME}")],
+                               "Memoria acima de {$FLT.MEM.MAX}% por 3 amostras em {HOST.NAME}", comp="memoria")],
         "disk_free_pct": [guard(T_SYS, "flt.sys[disk_free_pct]", "<", "{$FLT.DISK.FREE.MIN}",
-                                "Disco livre abaixo de {$FLT.DISK.FREE.MIN}% em {HOST.NAME}")],
+                                "Disco livre abaixo de {$FLT.DISK.FREE.MIN}% em {HOST.NAME}", comp="disco")],
+        "iowait_pct": [guard(T_SYS, "flt.sys[iowait_pct]", ">", "{$FLT.IOWAIT.MAX}",
+                             "CPU esperando disco acima de {$FLT.IOWAIT.MAX}% em {HOST.NAME}", "WARNING",
+                             desc="O disco limita o servidor (log em debug, banco, gravacao).", comp="disco")],
         "udp_rcvbuf_err_s": [guard(T_SYS, "flt.sys[udp_rcvbuf_err_s]", ">", "0",
                                    "Descarte de UDP por buffer de recepcao cheio em {HOST.NAME}",
-                                   "WARNING", desc="net.core.rmem_max/rmem_default insuficientes para o volume SIP/RTP.")],
+                                   "WARNING", desc="net.core.rmem_max/rmem_default insuficientes para o volume SIP/RTP.",
+                                   comp="rede")],
+        "net_rx_drop_s": [guard(T_SYS, "flt.sys[net_rx_drop_s]", ">", "{$FLT.NET.DROP.MAX}",
+                                "Descarte de pacotes na interface em {HOST.NAME}", "WARNING",
+                                desc="Fila da placa ou softirq saturados (ring buffer, RSS, CPU do nucleo das interrupcoes).",
+                                comp="rede")],
     }
     templates.append({
         "name": T_SYS,
@@ -391,12 +443,15 @@ def build():
         "macros": [("{$FLT.CPU.MAX}", "85", "GUARD_MAX_CPU_PCT (no gerador: GUARD_MAX_GEN_CPU_PCT)"),
                    ("{$FLT.MEM.MAX}", "90", "GUARD_MAX_MEM_PCT"),
                    ("{$FLT.DISK.FREE.MIN}", "15", "GUARD_MIN_DISK_FREE_PCT"),
+                   ("{$FLT.IOWAIT.MAX}", "20", "CPU esperando disco (%)"),
+                   ("{$FLT.NET.DROP.MAX}", "0", "Pacotes descartados por segundo na interface"),
                    ("{$FLT.NODATA}", "5m", "Sem dados por este tempo = fim do teste (recupera os problemas)")],
         "graphs": [
             graph(T_SYS, "Flux LT: CPU", ["cpu_pct", "cpu_max_core_pct", "iowait_pct", "softirq_pct", "steal_pct"]),
             graph(T_SYS, "Flux LT: memoria", ["mem_used_pct"]),
             graph(T_SYS, "Flux LT: rede (bps)", ["net_rx_mbps", "net_tx_mbps"]),
             graph(T_SYS, "Flux LT: rede (pps)", ["net_rx_pps", "net_tx_pps"]),
+            graph(T_SYS, "Flux LT: rede (descartes)", ["udp_rcvbuf_err_s", "udp_in_err_s", "net_rx_drop_s", "net_tx_drop_s"]),
             graph(T_SYS, "Flux LT: disco", ["disk_rd_kbs", "disk_wr_kbs"]),
         ],
         "tag": "sistema",
@@ -410,16 +465,32 @@ def build():
         "items": FS_ITEMS,
         "triggers": {
             "fs_idle_cpu": [guard(T_FS, "flt.app[fs_idle_cpu]", "<", "{$FLT.FS.IDLE.MIN}",
-                                  "FreeSWITCH com CPU ociosa abaixo de {$FLT.FS.IDLE.MIN}% em {HOST.NAME}")],
-            "fs_sessions": [guard(T_FS, "flt.app[fs_sessions]", ">", "{$FLT.FS.SESSIONS.MAX}",
-                                  "FreeSWITCH perto de max-sessions em {HOST.NAME}", "WARNING",
-                                  desc="Ajuste {$FLT.FS.SESSIONS.MAX} para 90% do max-sessions do switch.conf.xml.")],
+                                  "FreeSWITCH com CPU ociosa abaixo de {$FLT.FS.IDLE.MIN}% em {HOST.NAME}",
+                                  comp="freeswitch")],
+            "fs_sessions_pct": [guard(T_FS, "flt.app[fs_sessions_pct]", ">", "{$FLT.FS.SESSIONS.PCT}",
+                                      "FreeSWITCH perto de max-sessions (acima de {$FLT.FS.SESSIONS.PCT}%) em {HOST.NAME}",
+                                      "WARNING", desc="Sessoes / max_sessions em uso (fsctl). No teto, o FS responde 503.",
+                                      comp="freeswitch")],
+            "freeswitch_max_thread_pct": [thread_trigger(T_FS, "freeswitch", "FreeSWITCH", "freeswitch")],
+            "fs_api_ms": [guard(T_FS, "flt.app[fs_api_ms]", ">", "{$FLT.FS.PROBE.MAX}",
+                                "FreeSWITCH lento para responder (status acima de {$FLT.FS.PROBE.MAX} ms) em {HOST.NAME}",
+                                "AVERAGE", desc="O nucleo ou o event socket do FS esta ocupado.", comp="freeswitch")],
+            "fs_db_probe_ms": [guard(T_FS, "flt.app[fs_db_probe_ms]", ">", "{$FLT.FS.PROBE.MAX}",
+                                     "FreeSWITCH esperando o banco interno (show calls count acima de {$FLT.FS.PROBE.MAX} ms) em {HOST.NAME}",
+                                     "AVERAGE",
+                                     desc="Falta de handles (max-db-handles, db-handle-timeout) ou core db lento. "
+                                          "Compare com MySQL: latencia media: se o MySQL estiver rapido, o limite e o pool do FS.",
+                                     comp="freeswitch")],
         },
         "macros": [("{$FLT.FS.IDLE.MIN}", "10", "min idle cpu do FreeSWITCH"),
-                   ("{$FLT.FS.SESSIONS.MAX}", "900", "90% de max-sessions (repositorio: 1000)"),
+                   ("{$FLT.FS.SESSIONS.PCT}", "90", "Sessoes / max_sessions em uso (%)"),
+                   ("{$FLT.FS.PROBE.MAX}", "500", "Tempo de resposta do fs_cli (ms)"),
+                   ("{$FLT.THREAD.MAX}", "85", "CPU de uma thread (100 = 1 nucleo)"),
                    ("{$FLT.NODATA}", "5m", "Sem dados por este tempo = fim do teste")],
         "graphs": [graph(T_FS, "Flux LT: FreeSWITCH chamadas", ["fs_calls", "fs_sessions", "fs_sps"]),
-                   graph(T_FS, "Flux LT: FreeSWITCH CPU", ["freeswitch_cpu_pct", "fs_idle_cpu"])],
+                   graph(T_FS, "Flux LT: FreeSWITCH ocupacao", ["fs_sessions_pct"]),
+                   graph(T_FS, "Flux LT: FreeSWITCH CPU", ["freeswitch_cpu_pct", "freeswitch_max_thread_pct", "fs_idle_cpu"]),
+                   graph(T_FS, "Flux LT: FreeSWITCH tempo de resposta", ["fs_api_ms", "fs_db_probe_ms"])],
         "tag": "freeswitch",
     })
 
@@ -431,12 +502,34 @@ def build():
         "items": OS_ITEMS,
         "triggers": {
             "os_shm_used_pct": [guard(T_OS, "flt.app[os_shm_used_pct]", ">", "{$FLT.OS.SHM.MAX}",
-                                      "OpenSIPS com memoria compartilhada acima de {$FLT.OS.SHM.MAX}% em {HOST.NAME}")],
+                                      "OpenSIPS com memoria compartilhada acima de {$FLT.OS.SHM.MAX}% em {HOST.NAME}",
+                                      comp="opensips")],
+            "os_load": [guard(T_OS, "flt.app[os_load]", ">", "{$FLT.OS.LOAD.MAX}",
+                              "OpenSIPS com processos SIP ocupados acima de {$FLT.OS.LOAD.MAX}% em {HOST.NAME}", "AVERAGE",
+                              desc="load:load = fracao do tempo com os workers SIP ocupados. Perto de 100 = faltam processos "
+                                   "(children/udp_workers) ou algo lento no script (banco, DNS, lb).", comp="opensips")],
+            "opensips_max_thread_pct": [thread_trigger(T_OS, "opensips", "OpenSIPS", "opensips")],
+            "os_lb_max_pct": [guard(T_OS, "flt.app[os_lb_max_pct]", ">", "{$FLT.OS.LB.MAX}",
+                                    "load_balancer com destino acima de {$FLT.OS.LB.MAX}% da capacidade em {HOST.NAME}",
+                                    "AVERAGE", desc="O OpenSIPS deixa de mandar chamadas a esse FS (503). Suba o max_sessions "
+                                                    "(fs-limites.sh) ou acrescente FS ao grupo.", comp="opensips")],
+            "os_drop_req_total": [increase(T_OS, "flt.app[os_drop_req_total]",
+                                           "OpenSIPS descartando requisicoes em {HOST.NAME}",
+                                           desc="core:drop_requests subiu: requisicoes descartadas pelo script ou por falta de recurso.",
+                                           comp="opensips")],
+            "os_failed_dlg_total": [increase(T_OS, "flt.app[os_failed_dlg_total]",
+                                             "OpenSIPS com dialogos falhando em {HOST.NAME}",
+                                             desc="dialog:failed_dialogs subiu (503 do load_balancer, destino sem resposta).",
+                                             comp="opensips")],
         },
         "macros": [("{$FLT.OS.SHM.MAX}", "80", "shmem:real_used_size / total_size"),
+                   ("{$FLT.OS.LOAD.MAX}", "70", "load:load dos workers SIP (%)"),
+                   ("{$FLT.OS.LB.MAX}", "85", "load/max do destino mais cheio do load_balancer (%)"),
+                   ("{$FLT.THREAD.MAX}", "85", "CPU de um processo (100 = 1 nucleo)"),
                    ("{$FLT.NODATA}", "5m", "Sem dados por este tempo = fim do teste")],
         "graphs": [graph(T_OS, "Flux LT: OpenSIPS dialogos", ["os_active_dlg", "os_early_dlg", "os_tm_inuse"]),
-                   graph(T_OS, "Flux LT: OpenSIPS requisicoes", ["os_rcv_req_s"])],
+                   graph(T_OS, "Flux LT: OpenSIPS requisicoes", ["os_rcv_req_s"]),
+                   graph(T_OS, "Flux LT: OpenSIPS ocupacao", ["os_load", "opensips_max_thread_pct", "os_shm_used_pct", "os_lb_max_pct"])],
         "tag": "opensips",
     })
 
@@ -448,17 +541,39 @@ def build():
         "items": DB_ITEMS,
         "triggers": {
             "db_wsrep_cluster_size": [guard(T_DB, "flt.app[db_wsrep_cluster_size]", "<", "{$FLT.WSREP.SIZE.MIN}",
-                                            "PXC com menos de {$FLT.WSREP.SIZE.MIN} nos em {HOST.NAME}", "HIGH")],
+                                            "PXC com menos de {$FLT.WSREP.SIZE.MIN} nos em {HOST.NAME}", "HIGH",
+                                            comp="mysql")],
             "db_wsrep_fc_paused_pct": [guard(T_DB, "flt.app[db_wsrep_fc_paused_pct]", ">", "{$FLT.WSREP.FC.MAX}",
-                                             "PXC pausado por flow control acima de {$FLT.WSREP.FC.MAX}% em {HOST.NAME}")],
+                                             "PXC pausado por flow control acima de {$FLT.WSREP.FC.MAX}% em {HOST.NAME}",
+                                             comp="mysql")],
             "db_wsrep_primary": [guard(T_DB, "flt.app[db_wsrep_primary]", "<", "1",
-                                       "PXC fora do componente Primary em {HOST.NAME}", "DISASTER")],
+                                       "PXC fora do componente Primary em {HOST.NAME}", "DISASTER", comp="mysql")],
+            "db_stmt_avg_ms": [guard(T_DB, "flt.app[db_stmt_avg_ms]", ">", "{$FLT.DB.LAT.MAX}",
+                                     "MySQL lento: latencia media acima de {$FLT.DB.LAT.MAX} ms em {HOST.NAME}", "AVERAGE",
+                                     desc="As consultas do FS, do OpenSIPS e da interface demoram mais: o banco limita o teste.",
+                                     comp="mysql")],
+            "db_threads_running": [guard(T_DB, "flt.app[db_threads_running]", ">", "{$FLT.DB.RUNNING.MAX}",
+                                         "MySQL com mais de {$FLT.DB.RUNNING.MAX} consultas executando ao mesmo tempo em {HOST.NAME}",
+                                         "AVERAGE", desc="Consultas enfileiradas: CPU, disco ou locks do banco.", comp="mysql")],
+            "db_conn_pct": [guard(T_DB, "flt.app[db_conn_pct]", ">", "{$FLT.DB.CONN.MAX}",
+                                  "MySQL com conexoes acima de {$FLT.DB.CONN.MAX}% do max_connections em {HOST.NAME}",
+                                  "AVERAGE", comp="mysql")],
+            "mysqld_max_thread_pct": [thread_trigger(T_DB, "mysqld", "MySQL", "mysql")],
+            "db_row_lock_waits_total": [increase(T_DB, "flt.app[db_row_lock_waits_total]",
+                                                 "MySQL com esperas de lock de linha em {HOST.NAME}", comp="mysql")],
+            "db_slow_total": [increase(T_DB, "flt.app[db_slow_total]",
+                                       "MySQL registrando consultas lentas em {HOST.NAME}", comp="mysql")],
         },
         "macros": [("{$FLT.WSREP.SIZE.MIN}", "2", "GUARD_MIN_WSREP_CLUSTER_SIZE"),
                    ("{$FLT.WSREP.FC.MAX}", "10", "GUARD_MAX_WSREP_FC_PCT"),
+                   ("{$FLT.DB.LAT.MAX}", "20", "Latencia media das consultas (ms)"),
+                   ("{$FLT.DB.RUNNING.MAX}", "8", "Threads_running (ajuste para o numero de nucleos do banco)"),
+                   ("{$FLT.DB.CONN.MAX}", "80", "Threads_connected / max_connections (%)"),
+                   ("{$FLT.THREAD.MAX}", "85", "CPU de uma thread (100 = 1 nucleo)"),
                    ("{$FLT.NODATA}", "5m", "Sem dados por este tempo = fim do teste")],
         "graphs": [graph(T_DB, "Flux LT: MySQL consultas", ["db_qps", "db_select_s", "db_insert_s", "db_update_s"]),
                    graph(T_DB, "Flux LT: MySQL threads", ["db_threads_running", "db_threads_connected"]),
+                   graph(T_DB, "Flux LT: MySQL latencia", ["db_stmt_avg_ms", "mysqld_max_thread_pct"]),
                    graph(T_DB, "Flux LT: PXC filas", ["db_wsrep_recv_queue", "db_wsrep_send_queue",
                                                       "db_wsrep_fc_paused_pct"])],
         "valuemaps": ["Flux Loadtest - wsrep state", "Flux Loadtest - sim/nao", "Flux Loadtest - replica"],
@@ -473,7 +588,7 @@ def build():
         "items": WEB_ITEMS,
         "triggers": {
             "fpm_listen_queue": [guard(T_WEB, "flt.app[fpm_listen_queue]", ">", "0",
-                                       "PHP-FPM com fila de conexoes em {HOST.NAME}", "WARNING")],
+                                       "PHP-FPM com fila de conexoes em {HOST.NAME}", "WARNING", comp="web")],
         },
         "macros": [("{$FLT.NODATA}", "5m", "Sem dados por este tempo = fim do teste")],
         "graphs": [graph(T_WEB, "Flux LT: nginx / PHP-FPM requisicoes", ["ngx_rps", "fpm_rps"]),
@@ -487,8 +602,15 @@ def build():
         "desc": "Processos da VM de teste (SIPp, wrk, sysbench). Chave flt.app. "
                 "Defina {$FLT.CPU.MAX} = GUARD_MAX_GEN_CPU_PCT no host (o setup do flux-loadtest faz isso).",
         "master": ("flt.app", "Amostra do servico (JSON)"),
-        "items": GEN_ITEMS, "triggers": {},
-        "macros": [],
+        "items": GEN_ITEMS,
+        "triggers": {
+            "sipp_max_thread_pct": [guard(T_GEN, "flt.app[sipp_max_thread_pct]", ">", "{$FLT.THREAD.MAX}",
+                                          "Gerador saturado: SIPp acima de {$FLT.THREAD.MAX}% de um nucleo em {HOST.NAME}",
+                                          "HIGH", desc="O SIPp tem uma thread de sinalizacao: perto de 100% os tempos medidos "
+                                                       "passam a refletir o gerador, nao os servidores.", comp="gerador")],
+        },
+        "macros": [("{$FLT.THREAD.MAX}", "85", "CPU de uma thread (100 = 1 nucleo)"),
+                   ("{$FLT.NODATA}", "5m", "Sem dados por este tempo = fim do teste")],
         "graphs": [graph(T_GEN, "Flux LT: geradores CPU", ["sipp_cpu_pct", "wrk_cpu_pct", "sysbench_cpu_pct"])],
         "tag": "gerador",
     })
@@ -507,12 +629,21 @@ def run_template():
             "recovery": f"max(/{T_RUN}/flt.sip[failed_pct_p],#3)<={{$FLT.SIP.FAIL.MAX}} "
                         f"or nodata(/{T_RUN}/flt.sip[failed_pct_p],{{$FLT.NODATA}})=1",
             "name": "Falhas SIP acima de {$FLT.SIP.FAIL.MAX}% por 3 periodos", "priority": "HIGH",
-            "opdata": "{ITEM.LASTVALUE1}"}],
+            "opdata": "{ITEM.LASTVALUE1}", "tags": ttags("sip", "sintoma")}],
+        "rt_200_ms": [guard(T_RUN, "flt.sip[rt_200_ms]", ">", "{$FLT.SIP.PDD.MAX}",
+                            "Atendimento lento: INVITE -> 200 acima de {$FLT.SIP.PDD.MAX} ms por 3 periodos", "WARNING",
+                            desc="Sintoma visto pelo SIPp. A causa aparece nos problemas tipo=gargalo do mesmo horario "
+                                 "(FreeSWITCH, OpenSIPS, MySQL, rede ou gerador).", comp="sip", kind="sintoma")],
+        "retrans_p": [guard(T_RUN, "flt.sip[retrans_p]", ">", "{$FLT.SIP.RETRANS.MAX}",
+                            "Retransmissoes SIP acima de {$FLT.SIP.RETRANS.MAX} por periodo", "WARNING",
+                            desc="Respostas atrasadas ou pacotes perdidos entre o gerador e o OpenSIPS.",
+                            comp="sip", kind="sintoma")],
         "watchdog_p": [{
             "expr": f"last(/{T_RUN}/flt.sip[watchdog_p])>0",
             "recovery": f"last(/{T_RUN}/flt.sip[watchdog_p])=0 or nodata(/{T_RUN}/flt.sip[watchdog_p],{{$FLT.NODATA}})=1",
             "name": "SIPp com watchdog (VM de teste sobrecarregada)", "priority": "WARNING",
-            "desc": "Os numeros do SIPp deixam de ser confiaveis: reduza a carga ou aumente a VM de teste."}],
+            "desc": "Os numeros do SIPp deixam de ser confiaveis: reduza a carga ou aumente a VM de teste.",
+            "tags": ttags("gerador")}],
     }
     for d in SIP_ITEMS:
         items.append(("flt.sip", f"flt.sip[{d['col']}]", f"$.{d['col']}", d, sip_trig.get(d["col"])))
@@ -610,6 +741,8 @@ def emit(version):
         dep_item(y, tpl, master, key, path, d, [("component", comp)], trig)
     y.add(3, "macros:")
     for m, v, desc in [("{$FLT.SIP.FAIL.MAX}", "5", "GUARD_MAX_FAIL_PCT"),
+                       ("{$FLT.SIP.PDD.MAX}", "1000", "INVITE -> 200 medio do periodo (ms)"),
+                       ("{$FLT.SIP.RETRANS.MAX}", "20", "Retransmissoes por periodo do SIPp"),
                        ("{$FLT.NODATA}", "5m", "Sem dados por este tempo = fim do teste")]:
         y.add(4, f"- macro: {q(m)}")
         y.add(5, f"value: {q(v)}")
