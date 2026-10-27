@@ -312,7 +312,8 @@ counter_rate() {
 
 app_header() {
     case "${ROLE}" in
-        fs)       printf ',fs_calls,fs_sessions,fs_sps,fs_idle_cpu,fs_api_ms,fs_db_probe_ms,fs_max_sessions,fs_sessions_pct' ;;
+        fs)       printf ',fs_calls,fs_sessions,fs_sps,fs_idle_cpu,fs_api_ms,fs_db_probe_ms,fs_max_sessions,fs_sessions_pct'
+                  printf ',fs_db_handles,fs_db_handles_used,fs_db_handles_pct' ;;
         opensips) printf ',os_active_dlg,os_early_dlg,os_tm_inuse,os_rcv_req_s,os_failed_dlg_total,os_drop_req_total,os_shm_used_pct,os_load,os_lb_max_pct' ;;
         db)       printf ',db_qps,db_select_s,db_insert_s,db_update_s,db_threads_running,db_threads_connected,db_slow_total,db_row_lock_waits_total,db_repl_lag,db_repl_ok'
                   printf ',db_wsrep_recv_queue,db_wsrep_send_queue,db_wsrep_fc_paused_pct,db_wsrep_cluster_size,db_wsrep_state,db_wsrep_primary,db_vip'
@@ -351,8 +352,20 @@ app_sample() {
         if [[ ${maxs} =~ ^[0-9]+$ && ${sessions} =~ ^[0-9]+$ ]] && ((maxs > 0)); then
             spct=$(fmt1 $((sessions * 1000 / maxs)))
         fi
-        printf -v APP_LINE ',%s,%s,%s,%s,%s,%s,%s,%s' "${calls}" "${sessions}" "${sps}" "${idle}" "${api_ms}" "${db_ms}" \
-            "${maxs}" "${spct}"
+        # Pool de handles do banco do core (db_cache status: "N total. M in use."). Com M no
+        # max-db-handles, a criacao de canal espera ate db-handle-timeout; o aviso do FS nao
+        # aparece com loglevel DISABLE, entao a ocupacao e medida aqui.
+        local hl htot="" hused="" hpct=""
+        hl=$(run_app "db_cache status" | grep -oE '[0-9]+ total\. [0-9]+ in use' | tail -n 1)
+        if [[ ${hl} =~ ^([0-9]+)\ total\.\ ([0-9]+)\ in\ use$ ]]; then
+            htot=${BASH_REMATCH[1]}
+            hused=${BASH_REMATCH[2]}
+            if ((FS_MAX_DB_HANDLES > 0)); then
+                hpct=$(fmt1 $((hused * 1000 / FS_MAX_DB_HANDLES)))
+            fi
+        fi
+        printf -v APP_LINE ',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s' "${calls}" "${sessions}" "${sps}" "${idle}" "${api_ms}" \
+            "${db_ms}" "${maxs}" "${spct}" "${htot}" "${hused}" "${hpct}"
         ;;
     opensips)
         local act early tmu rcv failed drop shu sht shp="" load
@@ -507,6 +520,13 @@ read_uptime_ticks
 sample_procs; save_procs; sample_threads
 PREV_UPTIME_TICKS=${UPTIME_TICKS}
 DT_MS=$((INTERVAL * 1000))
+FS_MAX_DB_HANDLES=0
+if [[ ${ROLE} == fs ]]; then
+    # max-db-handles do switch.conf (padrao do FS: 50). Lido uma vez: so muda com restart.
+    FS_MAX_DB_HANDLES=$(run_app "xml_locate configuration configuration name switch.conf" | tr '>' '\n' \
+        | sed -n 's/.*<param[[:space:]][^<]*name="max-db-handles"[^<]*value="\([0-9]*\)".*/\1/p' | head -n 1)
+    [[ ${FS_MAX_DB_HANDLES} =~ ^[0-9]+$ ]] || FS_MAX_DB_HANDLES=50
+fi
 DB_MAXCONN=0
 if [[ ${ROLE} == db ]]; then
     DB_MAXCONN=$(run_app -N -B -e "SELECT @@max_connections")

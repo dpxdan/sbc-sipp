@@ -658,7 +658,7 @@ O que é coletado (`lib/capacidade.sh`):
 |---|---|
 | Todos | Memória total e disponível, swap, threads do sistema e `kernel.threads-max`, `RcvbufErrors` de UDP, `rmem_max`, disco livre |
 | Processo (FS, OpenSIPS, MySQL) | Threads, RSS, `LimitNPROC`, `LimitNOFILE`, `TasksMax` do systemd, teto efetivo de threads e uso; arquivos abertos quando o usuário SSH pode ler `/proc/PID/fd` |
-| FreeSWITCH | `max_sessions` e `sps` em uso e no `switch.conf`, sessões atuais e pico, chamadas, `loglevel`, banco interno (SQLite ou ODBC; a idade do `core.db` mostra restart pendente), `max-db-handles`, faixa RTP e portas UDP em uso nela, `rtp-timeout-sec` e `rtp-hold-timeout-sec` dos profiles, `media_timeout` global, disco e tamanho do log |
+| FreeSWITCH | `max_sessions` e `sps` em uso e no `switch.conf`, sessões atuais e pico, chamadas, `loglevel`, banco interno (SQLite ou ODBC; a idade do `core.db` mostra restart pendente), `max-db-handles` e handles do pool em uso (`db_cache status`), faixa RTP e portas UDP em uso nela, `rtp-timeout-sec` e `rtp-hold-timeout-sec` dos profiles, `media_timeout` global, disco e tamanho do log |
 | OpenSIPS | Memória compartilhada (total, em uso, pico desde o início), diálogos ativos e com falha, transações, `drop_requests`, `max` e `load` de cada destino do `load_balancer` |
 | MySQL / PXC | Conexões e `max_connections`, pico de conexões, `pxc_strict_mode`, threads de aplicação, flow control, filas de envio e recebimento |
 | VM de teste | `ulimit -n` (suave e rígido) |
@@ -1050,7 +1050,7 @@ Colunas por papel:
 
 | Papel | Processo | Colunas do serviço |
 |---|---|---|
-| FreeSWITCH | `freeswitch` | `fs_calls`, `fs_sessions`, `fs_sps`, `fs_idle_cpu`, `fs_api_ms` (tempo do `status`), `fs_db_probe_ms` (tempo do `show calls count`, que consulta o banco interno), `fs_max_sessions`, `fs_sessions_pct` |
+| FreeSWITCH | `freeswitch` | `fs_calls`, `fs_sessions`, `fs_sps`, `fs_idle_cpu`, `fs_api_ms` (tempo do `status`), `fs_db_probe_ms` (tempo do `show calls count`, que consulta o banco interno), `fs_max_sessions`, `fs_sessions_pct`, `fs_db_handles`, `fs_db_handles_used` e `fs_db_handles_pct` (pool do core db pelo `db_cache status`, em % do `max-db-handles`) |
 | OpenSIPS | `opensips` | `os_active_dlg`, `os_early_dlg`, `os_tm_inuse`, `os_rcv_req_s`, `os_failed_dlg_total`, `os_drop_req_total`, `os_shm_used_pct`, `os_load`, `os_lb_max_pct` (destino do `load_balancer` mais cheio, load/max) |
 | MySQL | `mysqld` | `db_qps`, `db_select_s`, `db_insert_s`, `db_update_s`, `db_threads_running`, `db_threads_connected`, `db_slow_total`, `db_row_lock_waits_total`, `db_repl_lag`, `db_repl_ok`, `db_wsrep_recv_queue`, `db_wsrep_send_queue`, `db_wsrep_fc_paused_pct`, `db_wsrep_cluster_size`, `db_wsrep_state`, `db_wsrep_primary`, `db_vip`, `db_stmt_avg_ms` (latência média das instruções no intervalo, `performance_schema`), `db_conn_pct` (conexões / `max_connections`) |
 | Web | `nginx`, `php-fpm` | `ngx_active`, `ngx_rps`, `ngx_writing`, `ngx_waiting`, `fpm_active`, `fpm_idle`, `fpm_listen_queue`, `fpm_rps`, `fpm_max_children_total`, `fpm_slow_total` |
@@ -1439,7 +1439,7 @@ usam macros que podem ser ajustadas no host:
 |---|---|
 | CPU, memória, disco livre, espera de disco | `{$FLT.CPU.MAX}` (85), `{$FLT.MEM.MAX}` (90), `{$FLT.DISK.FREE.MIN}` (15), `{$FLT.IOWAIT.MAX}` (20) |
 | Descarte de UDP por buffer cheio, descarte na interface | —, `{$FLT.NET.DROP.MAX}` (0) |
-| FreeSWITCH: CPU ociosa baixa, perto de `max_sessions` em uso, thread perto de 100%, `status` ou `show calls count` lentos | `{$FLT.FS.IDLE.MIN}` (10), `{$FLT.FS.SESSIONS.PCT}` (90), `{$FLT.THREAD.MAX}` (85), `{$FLT.FS.PROBE.MAX}` (500 ms) |
+| FreeSWITCH: CPU ociosa baixa, perto de `max_sessions` em uso, pool de handles do banco quase cheio, thread perto de 100%, `status` ou `show calls count` lentos | `{$FLT.FS.IDLE.MIN}` (10), `{$FLT.FS.SESSIONS.PCT}` (90), `{$FLT.FS.DBH.PCT}` (80), `{$FLT.THREAD.MAX}` (85), `{$FLT.FS.PROBE.MAX}` (500 ms) |
 | OpenSIPS: memória compartilhada, workers ocupados, destino do `load_balancer` cheio, processo perto de 100%, descartes, diálogos com falha | `{$FLT.OS.SHM.MAX}` (80), `{$FLT.OS.LOAD.MAX}` (70), `{$FLT.OS.LB.MAX}` (85), `{$FLT.THREAD.MAX}` (85) |
 | PXC: tamanho do cluster, flow control, fora do Primary | `{$FLT.WSREP.SIZE.MIN}` (2), `{$FLT.WSREP.FC.MAX}` (10) |
 | MySQL: latência média, consultas executando, conexões, thread perto de 100%, locks, consultas lentas | `{$FLT.DB.LAT.MAX}` (20 ms), `{$FLT.DB.RUNNING.MAX}` (8), `{$FLT.DB.CONN.MAX}` (80), `{$FLT.THREAD.MAX}` (85) |

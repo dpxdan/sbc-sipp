@@ -874,6 +874,78 @@ zabbix_export:
                 value: 'freeswitch'
               - tag: 'tipo'
                 value: 'gargalo'
+      - uuid: ccecaaea1dc14ec7b80585cb61694175
+        name: 'FreeSWITCH: handles do banco abertos'
+        type: DEPENDENT
+        key: 'flt.app[fs_db_handles]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        description: 'db_cache status: handles do core db abertos no pool (total).'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.fs_db_handles'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'freeswitch'
+      - uuid: 0a762754cdaf46698ccb5bbc6c4b816f
+        name: 'FreeSWITCH: handles do banco em uso'
+        type: DEPENDENT
+        key: 'flt.app[fs_db_handles_used]'
+        delay: '0'
+        history: 90d
+        value_type: UNSIGNED
+        description: 'db_cache status: handles do core db travados por uma consulta no momento da amostra.'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.fs_db_handles_used'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'freeswitch'
+      - uuid: d4572e7b326b4220988c6b51c71dbb7c
+        name: 'FreeSWITCH: handles do banco em uso (% do max-db-handles)'
+        type: DEPENDENT
+        key: 'flt.app[fs_db_handles_pct]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        description: 'Handles em uso / max-db-handles do switch.conf. Em 100%, a criacao de canal espera ate db-handle-timeout. O aviso do FS (Max handles exceeded) nao aparece com loglevel DISABLE.'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.fs_db_handles_pct'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'freeswitch'
+        triggers:
+          - uuid: ecc8fb7421574b6d8fec02d2c987df09
+            expression: 'min(/Flux Loadtest - FreeSWITCH/flt.app[fs_db_handles_pct],#3)>{$FLT.FS.DBH.PCT}'
+            recovery_mode: RECOVERY_EXPRESSION
+            recovery_expression: 'max(/Flux Loadtest - FreeSWITCH/flt.app[fs_db_handles_pct],#3)<={$FLT.FS.DBH.PCT} or nodata(/Flux Loadtest - FreeSWITCH/flt.app[fs_db_handles_pct],{$FLT.NODATA})=1'
+            name: 'FreeSWITCH perto de max-db-handles (acima de {$FLT.FS.DBH.PCT}%) em {HOST.NAME}'
+            opdata: '{ITEM.LASTVALUE1}'
+            priority: HIGH
+            description: 'Pool de handles do core db quase cheio: no teto, a criacao de canal espera ate db-handle-timeout. Compare com MySQL: latencia media: MySQL rapido e pool cheio = limite do FS (max-db-handles).'
+            manual_close: 'YES'
+            tags:
+              - tag: 'scope'
+                value: 'loadtest'
+              - tag: 'componente'
+                value: 'freeswitch'
+              - tag: 'tipo'
+                value: 'gargalo'
       macros:
         - macro: '{$FLT.FS.IDLE.MIN}'
           value: '10'
@@ -884,6 +956,9 @@ zabbix_export:
         - macro: '{$FLT.FS.PROBE.MAX}'
           value: '500'
           description: 'Tempo de resposta do fs_cli (ms)'
+        - macro: '{$FLT.FS.DBH.PCT}'
+          value: '80'
+          description: 'Handles do core db em uso / max-db-handles (%)'
         - macro: '{$FLT.THREAD.MAX}'
           value: '85'
           description: 'CPU de uma thread (100 = 1 nucleo)'
@@ -4702,6 +4777,11 @@ zabbix_export:
           item:
             host: 'Flux Loadtest - FreeSWITCH'
             key: 'flt.app[fs_sessions_pct]'
+        - sortorder: '1'
+          color: F63100
+          item:
+            host: 'Flux Loadtest - FreeSWITCH'
+            key: 'flt.app[fs_db_handles_pct]'
     - uuid: 4b46fd8a40c848d99b874613ed3f9be3
       name: 'Flux LT: FreeSWITCH CPU'
       graph_items:

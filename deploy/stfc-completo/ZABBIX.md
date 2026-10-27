@@ -45,7 +45,7 @@ Como ler um sintoma (o gatilho "Atendimento lento: INVITE -> 200 acima de 1000 m
 
 | O que sobe junto com o INVITE -> 200 | Gargalo provável | Onde confirmar |
 |---|---|---|
-| `FreeSWITCH: tempo do show calls count` alto, `status` rápido e `MySQL: latencia media` baixa | Pool de conexões do FS (`max-db-handles`, `db-handle-timeout`) | Log do FS: `Max handles ... exceeded` |
+| `FreeSWITCH: handles do banco em uso` perto de 100% do `max-db-handles`, ou `show calls count` alto com `status` rápido e `MySQL: latencia media` baixa | Pool de conexões do FS (`max-db-handles`, `db-handle-timeout`) | `fs_cli -x 'db_cache status'` e conexões por origem no banco. O aviso `Max handles ... exceeded` não aparece no log com `loglevel` DISABLE |
 | `FreeSWITCH: tempo do show calls count` e `MySQL: latencia media` altos | Banco (core db ou consultas do dialplan) | `MySQL: consultas executando`, flow control, consultas lentas |
 | `FreeSWITCH: thread mais carregada` perto de 100 com a CPU total baixa | Uma thread do FS, como o loop do sofia-sip da SIP-387 | `sip387-diagnostico.sh` no FS durante o patamar |
 | `FreeSWITCH: tempo de resposta do fs_cli` alto e CPU ociosa baixa | CPU do FS | `CPU total`, `FreeSWITCH: CPU ociosa` |
@@ -63,6 +63,7 @@ Limites (macros dos templates, ajustáveis por host):
 | `{$FLT.SIP.RETRANS.MAX}` | 20 | Retransmissões por período do SIPp |
 | `{$FLT.FS.PROBE.MAX}` | 500 ms | `status` e `show calls count` do FS |
 | `{$FLT.FS.SESSIONS.PCT}` | 90% | Sessões / `max_sessions` em uso |
+| `{$FLT.FS.DBH.PCT}` | 80% | Handles do core db em uso (`db_cache status`) / `max-db-handles` |
 | `{$FLT.THREAD.MAX}` | 85% | Thread mais carregada (FS, OpenSIPS, MySQL, SIPp) |
 | `{$FLT.OS.LOAD.MAX}` | 70% | `load:load` dos workers do OpenSIPS |
 | `{$FLT.OS.LB.MAX}` | 85% | Destino mais cheio do `load_balancer` |
@@ -194,6 +195,7 @@ Perfis do STFC (deste diretório):
 |---|---|
 | `stfc-piloto` | 10 CPS por 60 s |
 | `stfc-cps20` | 20 CPS sustentados por ~3 min (o maior valor com atraso aceitável hoje) |
+| `stfc-cps30` | 30 CPS sustentados por ~220 s (hold de 30 s): banco, `sps` e o A1; exige `fs-limites 150 1300` |
 | `stfc-c1000` | 1000 simultâneas a 10 CPS |
 | `stfc-c3000` | 3000 simultâneas a 10 CPS (hold de 300 s); exige limites maiores nos FS |
 | `stfc-c5000` | 5000 simultâneas a 10 CPS (hold de 500 s); exige limites maiores nos FS |
@@ -208,13 +210,19 @@ sem misturar com o atraso de CPS do .162 (A1). Simultâneas em regime = CPS x ho
 
 | Perfil | Janela / hold | Patamar | Duração total | `-l` do sipp | `fs-limites.sh aplicar` (nos 2 FS) |
 |---|---|---|---|---|---|
-| `stfc-c3000` | 420 s / 300 s | 120 s em 3000 | ~14 min | 3648 | `150 3500` |
-| `stfc-c5000` | 620 s / 500 s | 120 s em 5000 | ~21 min | 6048 | `150 5500` |
+| `stfc-c3000` | 420 s / 300 s | 120 s em 3000 | ~16 min | 3648 | `150 4200` |
+| `stfc-c5000` | 620 s / 500 s | 120 s em 5000 | ~23 min | 6048 | `150 7000` |
 
-O `max-sessions` segue a regra da seção 6 do `README.md`: metade das chamadas por FS, 2 sessões
-por chamada e 500 de margem para o tráfego real. Quando o FS chega ao `max-sessions`, ele
-responde `503 Maximum Calls In Progress` **também para as chamadas reais**, até o guard parar o
-teste.
+Regra do `max-sessions`: **1,4 x simultâneas**. Cada chamada ocupa 2 sessões, e o
+`load_balancer` não divide meio a meio: manda até ~55% para o .162, que tem mais CPU ociosa por
+não dividir o servidor com o OpenSIPS. Em 27/10/2026, com 3500, o .162 chegou a 91,6% no
+`stfc-c3000` e, com 5500, a 96% no `stfc-c5000`. O fator 1,4 deixa o nó mais carregado em ~80%,
+com folga para o tráfego real. Quando o FS chega ao `max-sessions`, ele responde
+`503 Maximum Calls In Progress` **também para as chamadas reais**, até o guard parar o teste.
+
+O `max` do `lb_list` não é fixo: o OpenSIPS o recalcula com os dados que o FS publica (sessões e
+CPU ociosa). Nas fotos de 27/10/2026, sem carga, ficou perto de `max_sessions` x CPU ociosa; no
+pico do `stfc-c3000` caiu para ~1700-1900, e a ocupação do destino mais cheio chegou a 90,9%.
 
 O `switch.conf.xml` dos dois FS foi alterado para `max-sessions` 5000 e `sessions-per-second`
 300 depois da campanha de 21/10 (que mediu 2000 por FS). O arquivo só vale depois de um restart,
@@ -226,29 +234,31 @@ bash /opt/flux-loadtest/deploy/stfc-completo/fs-limites.sh mostrar
 
 | `max_sessions` em uso | `stfc-c3000` | `stfc-c5000` |
 |---|---|---|
-| 5000 | cabe (~3000 por FS); o `aplicar 150 3500` mantém 5000 | **não cabe**: ~5000 do teste + o tráfego real; aplicar `150 5500` |
-| 2000 | aplicar `150 3500` | aplicar `150 5500` |
+| 5000 | cabe; o `aplicar 150 4200` mantém 5000 | **não cabe**: ~5500 no .162 + o tráfego real; aplicar `150 7000` |
+| 2000 ou 3500 | aplicar `150 4200` | aplicar `150 7000` |
 
 O mesmo arquivo traz três itens que valem para os dois perfis:
 - `core-db-dsn` no MySQL (DSN `FLUX`, cluster PXC): a tabela `channels` de cada FS passa a ter
   milhares de linhas e cada chamada gera escritas no cluster. O volume de escritas acompanha o
   CPS (10, como no `stfc-c1000`), mas acompanhe o flow control do PXC no dashboard.
 - `max-db-handles` 50 e `db-handle-timeout` 10: se o pool esgotar, a criação de canal espera
-  até 10 s. Procure `DB handle` e `SQL ERR` no log do FS durante o teste.
-- `loglevel` debug: o volume de log acompanha o CPS e o espaço em disco do FS cai mais rápido
-  em testes longos. Pode ser baixado sem restart com `fsctl loglevel info`.
+  até 10 s. O coletor lê o pool com `db_cache status` a cada amostra
+  (`FreeSWITCH: handles do banco em uso`, gatilho em `{$FLT.FS.DBH.PCT}`).
+- `loglevel`: em 27/10/2026 estava em DISABLE nos dois FS (`fsctl loglevel`). Bom para o
+  desempenho, mas nenhum aviso do FS chega ao log, nem o de pool esgotado: use as métricas do
+  coletor. Com `loglevel` debug, o volume de log acompanha o CPS e o disco cai mais rápido.
 
 **Antes do `stfc-c3000`:**
 
 ```bash
 # nos dois FS (.163 e .162)
-bash /opt/flux-loadtest/deploy/stfc-completo/fs-limites.sh aplicar 150 3500
+bash /opt/flux-loadtest/deploy/stfc-completo/fs-limites.sh aplicar 150 4200
 # no .163, ~30 s depois: o max dos dois nos precisa ter subido
 opensips-cli -x mi lb_list | grep -E '"(uri|max|load)"'
 ```
 
-**Antes do `stfc-c5000`**, só depois de um `stfc-c3000` sem falhas, aplicar `150 5500` e
-conferir nos dois FS, porque cada nó chega a ~5500 sessões. A ação `capacidade` do
+**Antes do `stfc-c5000`**, só depois de um `stfc-c3000` sem falhas, aplicar `150 7000` e
+conferir nos dois FS, porque o .162 chega a ~5500 sessões. A ação `capacidade` do
 `flux-loadtest.sh` (`README.md`, seção 7.7) faz todas as conferências abaixo de uma vez, sem
 carga, e alerta o que estiver perto do limite ou com timeout de mídia menor que o hold:
 
@@ -268,6 +278,30 @@ Os perfis já registram a mesma foto antes, no pico e depois de cada execução
 | Memória do OpenSIPS | `opensips-cli -x mi get_statistics shmem:` | 21,7% com 1962 diálogos (A14) |
 
 Depois de cada execução, nos dois FS: `bash fs-limites.sh restaurar`.
+
+### Perfil de CPS
+
+Os perfis de simultâneas ficam em 10 CPS e não medem o que cresce com o CPS: escritas do
+`core-db-dsn` no PXC (~34 UPDATE e ~4 INSERT por chamada em 27/10/2026), consultas do roteamento
+(~90 SELECT por chamada), o `sps` dos FS e o atraso do .162 acima de ~20 CPS (A1). O
+`stfc-cps30` cobre isso:
+
+| Perfil | Rampa | Patamar | Simultâneas | Duração total | `fs-limites.sh aplicar` (nos 2 FS) |
+|---|---|---|---|---|---|
+| `stfc-cps30` | 10 a 30 CPS em 80 s (+5 a cada 20 s) | ~220 s em 30 CPS | ~900 (hold 30 s) | ~10 min | `150 1300` |
+
+O `sps` do FS conta sessões, não chamadas: 30 CPS x 2 sessões x ~55% no .162 = ~33 por FS, longe
+de 150. Na página Gargalos, acompanhe `MySQL: latencia media`, `PXC: replicacao pausada por flow
+control` e `FreeSWITCH: handles do banco em uso` contra o INVITE -> 200. Antes do perfil:
+
+```bash
+# nos dois FS (.163 e .162)
+bash /opt/flux-loadtest/deploy/stfc-completo/fs-limites.sh aplicar 150 1300
+```
+
+Perfil novo: depois de copiar para `/etc/flux-loadtest/profiles.d/`, rode de novo o
+`flux-host.sh prepare zabbix-agent` (comandos abaixo). O include do agent tem um `AllowKey` por
+perfil e, sem isso, o Zabbix descobre o `stfc-cps30` mas o agent recusa o disparo.
 
 ```bash
 install -d -m 0755 /etc/flux-loadtest/profiles.d && install -m 0644 /opt/flux-loadtest/deploy/stfc-completo/profiles/stfc-*.conf /etc/flux-loadtest/profiles.d/ && ls -l /etc/flux-loadtest/profiles.d
