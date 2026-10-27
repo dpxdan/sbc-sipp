@@ -79,6 +79,7 @@ equivalem às opções do `run`).
 | `stfc-cps20` | 10 a 20 CPS em 40 s (+5 a cada 20 s), janela 240 s, hold 20 s | ~9 min | — |
 | `stfc-cps30` | 10 a 30 CPS em 80 s (+5 a cada 20 s), ~220 s em 30 CPS, hold 30 s (~900 simultâneas) | ~10 min | `150 1300` |
 | `stfc-cps-escada50` | Escada de 10 a 50 CPS (+5 a cada 60 s), mais 120 s em 50, hold 10 s (~600 simultâneas) | ~16 min | `150 1300` |
+| `stfc-cps-escada-fina` | Escada de 16 a 26 CPS (+2 a cada 60 s), mais 60 s em 26, hold 10 s (~300 simultâneas) | ~12 min | `150 1300` |
 | `stfc-c1000` | 1000 simultâneas a 10 CPS (janela 150 s, hold 100 s) | ~9 min | — |
 | `stfc-c1000-rtp` | Igual ao `stfc-c1000`, com `MEDIA=rtp` (G.711 nos dois sentidos) | ~9 min | — |
 | `stfc-c2000` | 2000 simultâneas a 10 CPS (janela 320 s, hold 200 s, 120 s no patamar, `-l` 2448) | ~13 min | `150 2800` |
@@ -91,7 +92,8 @@ na mesma carga. Ele exige DIDs com `bypass_media = 0` (veja [Conta e DIDs de tes
 e coloca ~180 Mbit/s por sentido no gerador.
 
 Ordem recomendada: `stfc-piloto` -> `stfc-c1000` -> `stfc-c2000` -> `stfc-c3000` -> `stfc-c5000` (só depois de um
-`stfc-c3000` sem falhas) e, separadamente, `stfc-cps20` -> `stfc-cps30` -> `stfc-cps-escada50`.
+`stfc-c3000` sem falhas) e, separadamente, `stfc-cps20` -> `stfc-cps30` -> `stfc-cps-escada50`
+(e a `stfc-cps-escada-fina` em volta do teto encontrado).
 
 Antes de perfis longos, tire uma foto de capacidade com o hold planejado. Ela alerta timeout de mídia
 menor que o hold (com `MEDIA=none` não há RTP e as chamadas cairiam), memória, threads e portas RTP:
@@ -177,11 +179,12 @@ Com o limite encontrado, repita a escada direto em cada FS ([FreeSWITCH direto](
 | Os dois sozinhos sustentam mais que o sistema | OpenSIPS ou `load_balancer` (A15) |
 | Os dois param no mesmo ponto | Componente comum: banco ou gerador |
 
-### 4. Core db do `.162`
+### 4. Core db dos FS
 
-Se o `.162` for o limite, repita a escada antes e depois de trocar o core db dele (PXC, como o `.163`,
-ou `core.db` em tmpfs). A troca exige restart do FS; use a mesma janela do restart que aplica o `sps`
-do `switch.conf`.
+Na escada de 27/10/2026 o teto ficou entre 20 e 25 CPS, com CPU sobrando e sinais de fila no core db
+(`fs_calls` do `.163` acima das sessões). O roteiro completo está em [A/B do core db](ab-core-db.md):
+escada fina (`stfc-cps-escada-fina`) com captura no gerador e nos dois FS, decisão por nó e troca do
+core db (SQLite em tmpfs), com drenagem pelo `load_balancer`, restart e reversão.
 
 ## Criar um perfil
 
