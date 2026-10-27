@@ -66,6 +66,7 @@ nav:
       - Degraus e perfis: execucao/degraus-e-perfis.md
       - Runbook do STFC: execucao/runbook-stfc.md
       - FreeSWITCH direto: execucao/fs-direto.md
+      - A/B do core db: execucao/ab-core-db.md
       - Encerramento e reversão: execucao/encerramento.md
   - Resultados:
       - Arquivos e relatório: resultados/arquivos.md
