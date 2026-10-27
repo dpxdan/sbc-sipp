@@ -1296,21 +1296,15 @@ sip_real_errors() {
 report_sip() {
     local dir=$1 stats="$1/sip/stats.csv"
     [[ -s ${stats} ]] || { printf '  (sem dados do SIPp)\n'; return 0; }
-    local vals rt1 rt2 cl
-    vals=$(awk -F';' 'NR == 1 { for (i = 1; i <= NF; i++) c[$i] = i; next }
-        { l = $0; split($0, v, ";")
+    local total ok fail retr unexp rej mc mr cr rt1 rt2 cl
+    IFS='|' read -r total ok fail retr unexp rej cr rt1 rt2 cl < <(sipp_last "${stats}" TotalCallCreated \
+        "SuccessfulCall(C)" "FailedCall(C)" "FailedMaxUDPRetrans(C)" "FailedUnexpectedMessage(C)" \
+        "FailedCallRejected(C)" "CallRate(C)" "ResponseTime1(C)" "ResponseTime2(C)" "CallLength(C)") || true
+    IFS='|' read -r mc mr < <(awk -F';' 'NR == 1 { for (i = 1; i <= NF; i++) c[$i] = i; next }
+        { split($0, v, ";")
           cc = v[c["CurrentCall"]] + 0; if (cc > mc) mc = cc
           r = v[c["CallRate(P)"]] + 0; if (r > mr) mr = r }
-        END {
-            split(l, v, ";")
-            printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n",
-                v[c["TotalCallCreated"]], v[c["SuccessfulCall(C)"]], v[c["FailedCall(C)"]],
-                v[c["FailedMaxUDPRetrans(C)"]], v[c["FailedUnexpectedMessage(C)"]],
-                v[c["FailedCallRejected(C)"]], mc, mr, v[c["CallRate(C)"]],
-                v[c["ResponseTime1(C)"]], v[c["ResponseTime2(C)"]], v[c["CallLength(C)"]]
-        }' "${stats}")
-    local total ok fail retr unexp rej mc mr cr
-    IFS='|' read -r total ok fail retr unexp rej mc mr cr rt1 rt2 cl <<< "${vals}"
+        END { printf "%s|%s\n", mc, mr }' "${stats}")
     local pct="-"
     if (( ${ok:-0} + ${fail:-0} > 0 )); then
         pct=$(awk -v f="${fail}" -v o="${ok}" 'BEGIN { printf "%.2f", f * 100 / (f + o) }')
