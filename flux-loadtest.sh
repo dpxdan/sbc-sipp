@@ -74,7 +74,7 @@ declare -A CFG=(
     [MYSQL_BENCH_PASSWORD_FILE]="" [MYSQL_BENCH_DB]="loadtest" [MYSQL_BENCH_TABLES]="4"
     [MYSQL_BENCH_TABLE_SIZE]="100000" [MYSQL_BENCH_THREADS]="8" [MYSQL_BENCH_EXTRA_ARGS]=""
     [GUARD_MAX_CPU_PCT]="85" [GUARD_MAX_GEN_CPU_PCT]="90" [GUARD_MAX_MEM_PCT]="90"
-    [GUARD_MIN_DISK_FREE_PCT]="15" [GUARD_MAX_FAIL_PCT]="5" [GUARD_MAX_REPL_LAG]="30"
+    [GUARD_MIN_DISK_FREE_PCT]="15" [GUARD_MAX_FAIL_PCT]="5" [GUARD_MAX_PDD_MS]="0" [GUARD_MAX_REPL_LAG]="30"
     [GUARD_MAX_CORE_PCT]="0" [GUARD_HITS]="3"
     [GUARD_MAX_WSREP_FC_PCT]="10" [GUARD_MIN_WSREP_CLUSTER_SIZE]="0"
     [SAMPLE_INTERVAL]="5" [BASELINE_SECONDS]="60" [COOLDOWN_SECONDS]="60"
@@ -117,7 +117,7 @@ validate_config() {
     for key in SSH_PORT SIP_LOCAL_PORT RTP_PORT_BASE SIP_RECV_TIMEOUT_MS VM_GREETING_SECONDS \
                VM_BYTES_PER_SECOND MYSQL_BENCH_PORT MYSQL_BENCH_TABLES MYSQL_BENCH_TABLE_SIZE \
                MYSQL_BENCH_THREADS GUARD_MAX_CPU_PCT GUARD_MAX_GEN_CPU_PCT GUARD_MAX_MEM_PCT \
-               GUARD_MIN_DISK_FREE_PCT GUARD_MAX_FAIL_PCT GUARD_MAX_REPL_LAG GUARD_MAX_CORE_PCT \
+               GUARD_MIN_DISK_FREE_PCT GUARD_MAX_FAIL_PCT GUARD_MAX_PDD_MS GUARD_MAX_REPL_LAG GUARD_MAX_CORE_PCT \
                GUARD_HITS GUARD_MAX_WSREP_FC_PCT GUARD_MIN_WSREP_CLUSTER_SIZE \
                SAMPLE_INTERVAL BASELINE_SECONDS COOLDOWN_SECONDS ZABBIX_PORT UAS_RTP_PORT_BASE \
                CAPACITY_ALERT_PCT; do
@@ -588,7 +588,9 @@ host_violations() {
         }' "${file}"
 }
 
-# Taxa de falha SIP no ultimo periodo do -trace_stat (P), em percentual inteiro.
+# Ultimo periodo do -trace_stat (P): "falha_pct falhas encerradas pdd_ms". Taxa de falha em
+# percentual inteiro; pdd_ms = INVITE -> 200 medio do periodo (ResponseTime2, -1 sem a coluna).
+# So com 10 ou mais chamadas encerradas no periodo, para um periodo vazio nao disparar o guard.
 sip_fail_pct() {
     local file="${RUN_DIR}/sip/stats.csv"
     [[ -s ${file} ]] || return 0
@@ -597,7 +599,11 @@ sip_fail_pct() {
             if (l == "" || !("FailedCall(P)" in c)) exit
             split(l, v, ";")
             f = v[c["FailedCall(P)"]] + 0; s = v[c["SuccessfulCall(P)"]] + 0
-            if (f + s >= 10) printf "%d %d %d\n", f * 100 / (f + s), f, f + s
+            if (f + s < 10) exit
+            pdd = -1
+            if ("ResponseTime2(P)" in c && split(v[c["ResponseTime2(P)"]], t, ":") == 4)
+                pdd = int((t[1] * 3600 + t[2] * 60 + t[3]) * 1000 + t[4] / 1000)
+            printf "%d %d %d %d\n", f * 100 / (f + s), f, f + s, pdd
         }' "${file}"
 }
 
@@ -622,10 +628,14 @@ guard_check() {
     if ((with_sip)); then
         line=$(sip_fail_pct) || true
         if [[ -n ${line} ]]; then
-            local pct fails total
-            read -r pct fails total <<< "${line}"
+            local pct fails total pdd
+            read -r pct fails total pdd <<< "${line}"
             if ((pct > CFG[GUARD_MAX_FAIL_PCT])); then
                 current["sip:falha_pct"]="${pct}% (${fails}/${total})"
+            fi
+            # Atraso: em producao ele atinge tambem as chamadas reais, mesmo sem falha SIP
+            if ((CFG[GUARD_MAX_PDD_MS] > 0 && ${pdd:--1} > CFG[GUARD_MAX_PDD_MS])); then
+                current["sip:pdd_ms"]="${pdd}ms (INVITE -> 200 medio do periodo)"
             fi
         fi
     fi
@@ -2058,9 +2068,10 @@ print_plan() {
         printf '  mysql              sysbench em %s:%s schema %s, %s threads, %s s\n' "${CFG[MYSQL_BENCH_HOST]}" \
             "${CFG[MYSQL_BENCH_PORT]}" "${CFG[MYSQL_BENCH_DB]}" "${CFG[MYSQL_BENCH_THREADS]}" "${OPT_MYSQL_DURATION}"
     fi
-    printf '  limites            cpu>%s%% mem>%s%% disco_livre<%s%% falha_sip>%s%% replicacao>%ss nucleo>%s (0=off), %s amostras\n' \
+    printf '  limites            cpu>%s%% mem>%s%% disco_livre<%s%% falha_sip>%s%% pdd>%sms replicacao>%ss nucleo>%s (0=off), %s amostras\n' \
         "${CFG[GUARD_MAX_CPU_PCT]}" "${CFG[GUARD_MAX_MEM_PCT]}" "${CFG[GUARD_MIN_DISK_FREE_PCT]}" \
-        "${CFG[GUARD_MAX_FAIL_PCT]}" "${CFG[GUARD_MAX_REPL_LAG]}" "${CFG[GUARD_MAX_CORE_PCT]}" "${CFG[GUARD_HITS]}"
+        "${CFG[GUARD_MAX_FAIL_PCT]}" "${CFG[GUARD_MAX_PDD_MS]}" "${CFG[GUARD_MAX_REPL_LAG]}" \
+        "${CFG[GUARD_MAX_CORE_PCT]}" "${CFG[GUARD_HITS]}"
     printf '  limites cluster    no nao Synced, sem quorum, flow_control>%s%% (0=off), cluster_size<%s (0=off)\n' \
         "${CFG[GUARD_MAX_WSREP_FC_PCT]}" "${CFG[GUARD_MIN_WSREP_CLUSTER_SIZE]}"
     printf '  resultados         %s\n\n' "${RUN_DIR}"
