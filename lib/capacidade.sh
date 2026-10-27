@@ -202,7 +202,7 @@ fs_info() {
     kv fs_sessions_peak "${peak}"
     kv fs_sessions_pct "$(pct "${now_s}" "${max}")"
     kv fs_calls "${calls}"
-    lvl=$(run_app "fsctl loglevel" | grep -oE '\[[0-9]+\]' | tr -d '[]')
+    lvl=$(run_app "fsctl loglevel" | grep -oE '\[-?[0-9]+\]' | tr -d '[]')
     kv fs_loglevel "${lvl}"
 
     # Configuracao vista pelo FS (arquivo ou xml_curl). Vale no restart; compare com os valores em uso.
@@ -211,8 +211,18 @@ fs_info() {
     cfg_sps=$(xml_param "${sw}" sessions-per-second)
     kv fs_cfg_max_sessions "${cfg_max}"
     kv fs_cfg_sps "${cfg_sps}"
-    kv fs_cfg_max_db_handles "$(xml_param "${sw}" max-db-handles)"
+    local mdh hl htot hused
+    mdh=$(xml_param "${sw}" max-db-handles)
+    kv fs_cfg_max_db_handles "${mdh}"
     kv fs_cfg_db_handle_timeout "$(xml_param "${sw}" db-handle-timeout)"
+    # Pool de handles do core db: "N total. M in use." (o FS usa 50 sem o parametro)
+    is_num "${mdh}" || mdh=50
+    hl=$(run_app "db_cache status" | grep -oE '[0-9]+ total\. [0-9]+ in use' | tail -n 1)
+    htot=$(printf '%s' "${hl}" | awk '{ print $1 }')
+    hused=$(printf '%s' "${hl}" | awk '{ print $3 }')
+    kv fs_db_handles "${htot}"
+    kv fs_db_handles_used "${hused}"
+    kv fs_db_handles_pct "$(pct "${hused}" "${mdh}")"
     if [[ -n $(xml_param "${sw}" core-db-dsn) ]]; then
         kv fs_cfg_core_db odbc
     else

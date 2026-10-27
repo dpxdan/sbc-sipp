@@ -113,6 +113,13 @@ FS_ITEMS = proc_items("freeswitch", "FreeSWITCH") + [
             "ou o banco do core esta lento, mesmo com o status rapido."),
     it("fs_max_sessions", "FreeSWITCH: max_sessions em uso", "", None, "U"),
     it("fs_sessions_pct", "FreeSWITCH: sessoes (% do max_sessions)", "%"),
+    it("fs_db_handles", "FreeSWITCH: handles do banco abertos", "", None, "U",
+       desc="db_cache status: handles do core db abertos no pool (total)."),
+    it("fs_db_handles_used", "FreeSWITCH: handles do banco em uso", "", None, "U",
+       desc="db_cache status: handles do core db travados por uma consulta no momento da amostra."),
+    it("fs_db_handles_pct", "FreeSWITCH: handles do banco em uso (% do max-db-handles)", "%",
+       desc="Handles em uso / max-db-handles do switch.conf. Em 100%, a criacao de canal espera ate "
+            "db-handle-timeout. O aviso do FS (Max handles exceeded) nao aparece com loglevel DISABLE."),
 ]
 
 OS_ITEMS = proc_items("opensips", "OpenSIPS") + [
@@ -481,14 +488,21 @@ def build():
                                      desc="Falta de handles (max-db-handles, db-handle-timeout) ou core db lento. "
                                           "Compare com MySQL: latencia media: se o MySQL estiver rapido, o limite e o pool do FS.",
                                      comp="freeswitch")],
+            "fs_db_handles_pct": [guard(T_FS, "flt.app[fs_db_handles_pct]", ">", "{$FLT.FS.DBH.PCT}",
+                                        "FreeSWITCH perto de max-db-handles (acima de {$FLT.FS.DBH.PCT}%) em {HOST.NAME}",
+                                        desc="Pool de handles do core db quase cheio: no teto, a criacao de canal "
+                                             "espera ate db-handle-timeout. Compare com MySQL: latencia media: "
+                                             "MySQL rapido e pool cheio = limite do FS (max-db-handles).",
+                                        comp="freeswitch")],
         },
         "macros": [("{$FLT.FS.IDLE.MIN}", "10", "min idle cpu do FreeSWITCH"),
                    ("{$FLT.FS.SESSIONS.PCT}", "90", "Sessoes / max_sessions em uso (%)"),
                    ("{$FLT.FS.PROBE.MAX}", "500", "Tempo de resposta do fs_cli (ms)"),
+                   ("{$FLT.FS.DBH.PCT}", "80", "Handles do core db em uso / max-db-handles (%)"),
                    ("{$FLT.THREAD.MAX}", "85", "CPU de uma thread (100 = 1 nucleo)"),
                    ("{$FLT.NODATA}", "5m", "Sem dados por este tempo = fim do teste")],
         "graphs": [graph(T_FS, "Flux LT: FreeSWITCH chamadas", ["fs_calls", "fs_sessions", "fs_sps"]),
-                   graph(T_FS, "Flux LT: FreeSWITCH ocupacao", ["fs_sessions_pct"]),
+                   graph(T_FS, "Flux LT: FreeSWITCH ocupacao", ["fs_sessions_pct", "fs_db_handles_pct"]),
                    graph(T_FS, "Flux LT: FreeSWITCH CPU", ["freeswitch_cpu_pct", "freeswitch_max_thread_pct", "fs_idle_cpu"]),
                    graph(T_FS, "Flux LT: FreeSWITCH tempo de resposta", ["fs_api_ms", "fs_db_probe_ms"])],
         "tag": "freeswitch",
