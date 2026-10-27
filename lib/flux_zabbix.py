@@ -37,7 +37,7 @@ SYS_COLS = [
     "cpu_pct", "cpu_max_core_pct", "cpu_max_core", "iowait_pct", "steal_pct", "softirq_pct", "load1",
     "mem_used_pct", "mem_avail_mb", "swap_used_mb",
     "net_rx_mbps", "net_tx_mbps", "net_rx_pps", "net_tx_pps", "udp_in_err_s", "udp_rcvbuf_err_s",
-    "disk_rd_kbs", "disk_wr_kbs", "disk_busy_pct", "disk_free_pct",
+    "net_rx_drop_s", "net_tx_drop_s", "disk_rd_kbs", "disk_wr_kbs", "disk_busy_pct", "disk_free_pct",
 ]
 
 ROLE_TEMPLATES = {
@@ -751,6 +751,15 @@ def svggraph(name, x, y, datasets, w=DASH_COLS // 2, h=5):
             "view_mode": 0, "fields": fields}
 
 
+def problems_widget(name, x, y, h, gid, lines):
+    """Problemas do grupo Flux Loadtest. show_suppressed: os hosts flt-* ficam numa manutencao com
+    coleta (sem alertas ao suporte) e, sem ele, os problemas do teste nao aparecem no widget."""
+    return {"type": "problems", "name": name, "x": x, "y": y, "width": DASH_COLS, "height": h, "view_mode": 0,
+            "fields": [wfield(WF_GROUP, "groupids.0", gid), wfield(WF_INT, "show_lines", lines),
+                       wfield(WF_INT, "show_suppressed", 1), wfield(WF_INT, "show_tags", 3),
+                       wfield(WF_STR, "tag_priority", "componente,tipo"), wfield(WF_INT, "show_opdata", 1)]}
+
+
 def dashboard_pages(p, gid, result_items):
     """Paginas do dashboard. p = prefixo dos hosts; result_items = {chave: itemid} do host run."""
     run, half = p + "run*", DASH_COLS // 2
@@ -770,8 +779,37 @@ def dashboard_pages(p, gid, result_items):
         svggraph("Falhas e retransmissoes por periodo", half, 12,
                  [([run], ["SIPp: falhas no periodo (% das encerradas)"], "F63100", 0),
                   ([run], ["SIPp: retransmissoes no periodo"], "A54F10", 1)]),
-        {"type": "problems", "name": "Problemas do teste de carga", "x": 0, "y": 17, "width": DASH_COLS,
-         "height": 4, "view_mode": 0, "fields": [wfield(WF_GROUP, "groupids.0", gid), wfield(WF_INT, "show_lines", 10)]},
+        problems_widget("Problemas do teste de carga", 0, 17, 4, gid, 10),
+    ]
+    # Gargalos: problema (gatilho tipo=gargalo ou sintoma) e, por componente, a carga contra o sintoma.
+    # Leitura no ZABBIX.md (deploy/stfc-completo), secao "Onde esta o gargalo".
+    fs, os_, db = p + "fs*", p + "opensips*", p + "db*"
+    gargalos = [
+        problems_widget("Gargalos e sintomas (tags componente e tipo; inclui os suprimidos pela manutencao)",
+                        0, 0, 6, gid, 25),
+        svggraph("SIP: INVITE -> 200 (esq.) x chamadas simultaneas (dir.)", 0, 6,
+                 [([run], ["SIPp: INVITE -> 200*"], "F63100", 0),
+                  ([run], ["SIPp: chamadas simultaneas"], "2774A4", 1)]),
+        svggraph("FreeSWITCH: tempo de resposta em ms (esq.) x sessoes % do max (dir.)", half, 6,
+                 [([fs], ["FreeSWITCH: tempo de resposta do fs_cli*", "FreeSWITCH: tempo do show calls count*"], "F63100", 0),
+                  ([fs], ["FreeSWITCH: sessoes (% do max_sessions)"], "2774A4", 1)]),
+        svggraph("Thread mais carregada por processo (100 = 1 nucleo)", 0, 11,
+                 [([p + "*"], ["FreeSWITCH: thread mais carregada*", "OpenSIPS: thread mais carregada*",
+                               "MySQL: thread mais carregada*", "SIPp: thread mais carregada*"], "6C59DC", 0)]),
+        svggraph("OpenSIPS: ocupacao em % (esq.) x dialogos ativos (dir.)", half, 11,
+                 [([os_], ["OpenSIPS: load", "OpenSIPS: destino do load_balancer mais cheio",
+                           "OpenSIPS: memoria compartilhada usada"], "F63100", 0),
+                  ([os_], ["OpenSIPS: dialogos ativos"], "2774A4", 1)]),
+        svggraph("MySQL: latencia media em ms (esq.) x consultas por segundo (dir.)", 0, 16,
+                 [([db], ["MySQL: latencia media das consultas"], "F63100", 0),
+                  ([db], ["MySQL: consultas"], "2774A4", 1)]),
+        svggraph("MySQL: consultas executando e conexoes % do max (esq.) x flow control % (dir.)", half, 16,
+                 [([db], ["MySQL: threads em execucao", "MySQL: conexoes (% do max_connections)"], "A54F10", 0),
+                  ([db], ["PXC: replicacao pausada por flow control"], "F63100", 1)]),
+        svggraph("Rede: descartes por servidor (por segundo)", 0, 21,
+                 [([p + "*"], ["Erros de buffer de recepcao UDP", "Descartes na interface (recepcao)"], "F63100", 0)]),
+        svggraph("CPU: total x nucleo mais carregado x espera de disco (%)", half, 21,
+                 [([p + "*"], ["CPU total", "CPU do nucleo mais carregado", "CPU iowait"], "2774A4", 0)]),
     ]
     servidores = [
         svggraph("CPU total por servidor", 0, 0, [([p + "*"], ["CPU total"], "2774A4", 0)]),
@@ -785,7 +823,8 @@ def dashboard_pages(p, gid, result_items):
                  [([p + "db*"], ["MySQL: consultas"], "A54F10", 0), ([p + "db*"], ["MySQL: CPU*"], "6C59DC", 1)]),
         svggraph("Pacotes recebidos por servidor", half, 10, [([p + "*"], ["Pacotes recebidos"], "AC8C14", 0)]),
     ]
-    return [{"name": "Resultados", "widgets": resultado}, {"name": "Servidores", "widgets": servidores}]
+    return [{"name": "Resultados", "widgets": resultado}, {"name": "Gargalos", "widgets": gargalos},
+            {"name": "Servidores", "widgets": servidores}]
 
 
 def setup_dashboard(api, prefix, gid):

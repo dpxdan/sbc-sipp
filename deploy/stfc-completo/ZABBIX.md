@@ -18,6 +18,7 @@ Criado ou atualizado pelo `zabbix setup` (idempotente), com o nome
 | Página | Widgets |
 |---|---|
 | Resultados | Tabela com uma linha por execução: execução, status, chamadas criadas, falhas (%), pico de simultâneas, pico de CPS, INVITE -> 200 médio, originadas que não chegaram ao atendedor, motivo da interrupção. Gráficos de CPS alvo e realizado, simultâneas (originador e atendedor), INVITE -> 100/200 e falhas/retransmissões por período. Problemas do grupo `Flux Loadtest` |
+| Gargalos | Problemas do teste com as tags `componente` e `tipo` (incluindo os suprimidos pela manutenção). Gráficos de carga contra sintoma: INVITE -> 200 x simultâneas, tempo de resposta do FS x sessões, thread mais carregada de cada processo, ocupação do OpenSIPS e do `load_balancer`, latência e fila do MySQL, descartes de rede, CPU por núcleo |
 | Servidores | CPU e memória por servidor, sessões e chamadas dos FreeSWITCH, memória compartilhada, diálogos e transações do OpenSIPS, consultas e CPU do MySQL, pacotes recebidos |
 
 Os gráficos usam padrão de host e de nome de item (`flt-*`, `flt-fs*`...): servidores novos
@@ -27,6 +28,69 @@ dashboard (as de 21/10/2026: das 20:35 às 23:58).
 Validado num Zabbix 7.2.3 com a importação das 8 execuções de 21/10/2026: a tabela trouxe os
 mesmos números dos `report.txt` (ex.: `stfc-meta-c2000`, 2122 criadas, 7,3% de falha, pico de
 1962 simultâneas, INVITE -> 200 de 140 ms).
+
+### Onde está o gargalo
+
+A página **Gargalos** do dashboard junta, para o período escolhido, os problemas do teste e um
+gráfico de carga contra sintoma por componente. Os problemas trazem duas tags:
+
+- `tipo=sintoma`: o efeito visto pelo SIPp (atendimento lento, retransmissões, falhas);
+- `tipo=gargalo`: o recurso que está no limite, com `componente` = `freeswitch`, `opensips`,
+  `mysql`, `rede`, `cpu`, `memoria`, `disco`, `web` ou `gerador`.
+
+O widget de problemas mostra também os suprimidos: os hosts `flt-*` ficam numa manutenção com
+coleta (seção 6) e, sem isso, nada apareceria.
+
+Como ler um sintoma (o gatilho "Atendimento lento: INVITE -> 200 acima de 1000 ms"):
+
+| O que sobe junto com o INVITE -> 200 | Gargalo provável | Onde confirmar |
+|---|---|---|
+| `FreeSWITCH: tempo do show calls count` alto, `status` rápido e `MySQL: latencia media` baixa | Pool de conexões do FS (`max-db-handles`, `db-handle-timeout`) | Log do FS: `Max handles ... exceeded` |
+| `FreeSWITCH: tempo do show calls count` e `MySQL: latencia media` altos | Banco (core db ou consultas do dialplan) | `MySQL: consultas executando`, flow control, consultas lentas |
+| `FreeSWITCH: thread mais carregada` perto de 100 com a CPU total baixa | Uma thread do FS, como o loop do sofia-sip da SIP-387 | `sip387-diagnostico.sh` no FS durante o patamar |
+| `FreeSWITCH: tempo de resposta do fs_cli` alto e CPU ociosa baixa | CPU do FS | `CPU total`, `FreeSWITCH: CPU ociosa` |
+| `OpenSIPS: load` alto ou `OpenSIPS: thread mais carregada` perto de 100 | Workers do OpenSIPS (`children`/`udp_workers`) ou algo lento no script | `OpenSIPS: transacoes em uso` |
+| `OpenSIPS: destino do load_balancer mais cheio` perto de 100 | Capacidade do `load_balancer` (o FS ainda tem folga) | `lb_list`, `fs-limites.sh mostrar` |
+| `Erros de buffer de recepcao UDP` ou `Descartes na interface` acima de 0 | Rede ou buffer do kernel | `net.core.rmem_max`, softirq no `CPU do nucleo mais carregado` |
+| `SIPp: thread mais carregada` perto de 100 | Gerador: os números deixam de medir os servidores | CPU do .165 |
+| Nenhum dos acima | Atraso fora do que o coletor mede | Captura no .165 e `pdd-pcap.py` (atraso por FS e por trecho) |
+
+Limites (macros dos templates, ajustáveis por host):
+
+| Macro | Padrão | Gatilho |
+|---|---|---|
+| `{$FLT.SIP.PDD.MAX}` | 1000 ms | INVITE -> 200 médio do período |
+| `{$FLT.SIP.RETRANS.MAX}` | 20 | Retransmissões por período do SIPp |
+| `{$FLT.FS.PROBE.MAX}` | 500 ms | `status` e `show calls count` do FS |
+| `{$FLT.FS.SESSIONS.PCT}` | 90% | Sessões / `max_sessions` em uso |
+| `{$FLT.THREAD.MAX}` | 85% | Thread mais carregada (FS, OpenSIPS, MySQL, SIPp) |
+| `{$FLT.OS.LOAD.MAX}` | 70% | `load:load` dos workers do OpenSIPS |
+| `{$FLT.OS.LB.MAX}` | 85% | Destino mais cheio do `load_balancer` |
+| `{$FLT.DB.LAT.MAX}` | 20 ms | Latência média das consultas (performance_schema) |
+| `{$FLT.DB.RUNNING.MAX}` | 8 | `Threads_running`: ajuste para o número de núcleos do banco |
+| `{$FLT.DB.CONN.MAX}` | 80% | Conexões / `max_connections` |
+| `{$FLT.IOWAIT.MAX}` | 20% | CPU esperando disco |
+| `{$FLT.NET.DROP.MAX}` | 0 | Descartes por segundo na interface |
+
+Os gatilhos de contador (descartes do OpenSIPS, diálogos com falha, locks e consultas lentas
+do MySQL) disparam quando o contador sobe entre duas amostras.
+
+Para aplicar (no .165, depois de atualizar o repositório):
+
+```bash
+cd /opt/flux-loadtest && git pull --ff-only
+./flux-loadtest.sh zabbix setup --import-template -c /etc/flux-loadtest/loadtest.conf
+```
+
+O `--import-template` atualiza os templates e o `setup` refaz o dashboard. Os coletores novos
+entram na próxima execução; as execuções antigas não têm as métricas novas.
+
+A latência média do MySQL precisa de `SELECT` no `performance_schema` para o usuário do
+`MYSQL_CLI_CMD`. Sem a permissão, o item fica vazio e o gatilho não dispara:
+
+```sql
+GRANT SELECT ON performance_schema.* TO 'USUARIO_DO_FLUX_LOADTEST'@'HOST';
+```
 
 ## Pré-requisitos
 

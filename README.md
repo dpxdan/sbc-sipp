@@ -1042,17 +1042,17 @@ Colunas comuns a todos os servidores:
 |---|---|
 | CPU | `cpu_pct`, `cpu_max_core_pct`, `cpu_max_core`, `iowait_pct`, `steal_pct`, `softirq_pct`, `load1` |
 | Memória | `mem_used_pct`, `mem_avail_mb`, `swap_used_mb` |
-| Rede | `net_rx_mbps`, `net_tx_mbps`, `net_rx_pps`, `net_tx_pps`, `udp_in_err_s`, `udp_rcvbuf_err_s` |
+| Rede | `net_rx_mbps`, `net_tx_mbps`, `net_rx_pps`, `net_tx_pps`, `udp_in_err_s`, `udp_rcvbuf_err_s`, `net_rx_drop_s`, `net_tx_drop_s` (descartes na interface, sem `lo`) |
 | Disco | `disk_rd_kbs`, `disk_wr_kbs`, `disk_busy_pct`, `disk_free_pct` |
-| Processo | `<processo>_cpu_pct`, `<processo>_rss_mb`, `<processo>_threads` |
+| Processo | `<processo>_cpu_pct`, `<processo>_rss_mb`, `<processo>_threads`, `<processo>_max_thread_pct` (a thread, ou o processo no OpenSIPS e no PHP-FPM, que mais usou CPU no intervalo; 100 = 1 núcleo) |
 
 Colunas por papel:
 
 | Papel | Processo | Colunas do serviço |
 |---|---|---|
-| FreeSWITCH | `freeswitch` | `fs_calls`, `fs_sessions`, `fs_sps`, `fs_idle_cpu` |
-| OpenSIPS | `opensips` | `os_active_dlg`, `os_early_dlg`, `os_tm_inuse`, `os_rcv_req_s`, `os_failed_dlg_total`, `os_drop_req_total`, `os_shm_used_pct`, `os_load` |
-| MySQL | `mysqld` | `db_qps`, `db_select_s`, `db_insert_s`, `db_update_s`, `db_threads_running`, `db_threads_connected`, `db_slow_total`, `db_row_lock_waits_total`, `db_repl_lag`, `db_repl_ok`, `db_wsrep_recv_queue`, `db_wsrep_send_queue`, `db_wsrep_fc_paused_pct`, `db_wsrep_cluster_size`, `db_wsrep_state`, `db_wsrep_primary`, `db_vip` |
+| FreeSWITCH | `freeswitch` | `fs_calls`, `fs_sessions`, `fs_sps`, `fs_idle_cpu`, `fs_api_ms` (tempo do `status`), `fs_db_probe_ms` (tempo do `show calls count`, que consulta o banco interno), `fs_max_sessions`, `fs_sessions_pct` |
+| OpenSIPS | `opensips` | `os_active_dlg`, `os_early_dlg`, `os_tm_inuse`, `os_rcv_req_s`, `os_failed_dlg_total`, `os_drop_req_total`, `os_shm_used_pct`, `os_load`, `os_lb_max_pct` (destino do `load_balancer` mais cheio, load/max) |
+| MySQL | `mysqld` | `db_qps`, `db_select_s`, `db_insert_s`, `db_update_s`, `db_threads_running`, `db_threads_connected`, `db_slow_total`, `db_row_lock_waits_total`, `db_repl_lag`, `db_repl_ok`, `db_wsrep_recv_queue`, `db_wsrep_send_queue`, `db_wsrep_fc_paused_pct`, `db_wsrep_cluster_size`, `db_wsrep_state`, `db_wsrep_primary`, `db_vip`, `db_stmt_avg_ms` (latência média das instruções no intervalo, `performance_schema`), `db_conn_pct` (conexões / `max_connections`) |
 | Web | `nginx`, `php-fpm` | `ngx_active`, `ngx_rps`, `ngx_writing`, `ngx_waiting`, `fpm_active`, `fpm_idle`, `fpm_listen_queue`, `fpm_rps`, `fpm_max_children_total`, `fpm_slow_total` |
 | VM de teste | `sipp`, `wrk`, `sysbench` | — |
 
@@ -1437,17 +1437,25 @@ usam macros que podem ser ajustadas no host:
 
 | Gatilho | Macro (padrão) |
 |---|---|
-| CPU, memória, disco livre | `{$FLT.CPU.MAX}` (85), `{$FLT.MEM.MAX}` (90), `{$FLT.DISK.FREE.MIN}` (15) |
-| Descarte de UDP por buffer cheio | — |
-| FreeSWITCH: CPU ociosa baixa, perto de `max-sessions` | `{$FLT.FS.IDLE.MIN}` (10), `{$FLT.FS.SESSIONS.MAX}` (900) |
-| OpenSIPS: memória compartilhada | `{$FLT.OS.SHM.MAX}` (80) |
+| CPU, memória, disco livre, espera de disco | `{$FLT.CPU.MAX}` (85), `{$FLT.MEM.MAX}` (90), `{$FLT.DISK.FREE.MIN}` (15), `{$FLT.IOWAIT.MAX}` (20) |
+| Descarte de UDP por buffer cheio, descarte na interface | —, `{$FLT.NET.DROP.MAX}` (0) |
+| FreeSWITCH: CPU ociosa baixa, perto de `max_sessions` em uso, thread perto de 100%, `status` ou `show calls count` lentos | `{$FLT.FS.IDLE.MIN}` (10), `{$FLT.FS.SESSIONS.PCT}` (90), `{$FLT.THREAD.MAX}` (85), `{$FLT.FS.PROBE.MAX}` (500 ms) |
+| OpenSIPS: memória compartilhada, workers ocupados, destino do `load_balancer` cheio, processo perto de 100%, descartes, diálogos com falha | `{$FLT.OS.SHM.MAX}` (80), `{$FLT.OS.LOAD.MAX}` (70), `{$FLT.OS.LB.MAX}` (85), `{$FLT.THREAD.MAX}` (85) |
 | PXC: tamanho do cluster, flow control, fora do Primary | `{$FLT.WSREP.SIZE.MIN}` (2), `{$FLT.WSREP.FC.MAX}` (10) |
+| MySQL: latência média, consultas executando, conexões, thread perto de 100%, locks, consultas lentas | `{$FLT.DB.LAT.MAX}` (20 ms), `{$FLT.DB.RUNNING.MAX}` (8), `{$FLT.DB.CONN.MAX}` (80), `{$FLT.THREAD.MAX}` (85) |
 | PHP-FPM com fila | — |
-| Falhas SIP por período, watchdog do SIPp | `{$FLT.SIP.FAIL.MAX}` (5) |
+| Gerador: SIPp perto de 100% de um núcleo | `{$FLT.THREAD.MAX}` (85) |
+| Falhas SIP, INVITE -> 200, retransmissões por período, watchdog do SIPp | `{$FLT.SIP.FAIL.MAX}` (5), `{$FLT.SIP.PDD.MAX}` (1000 ms), `{$FLT.SIP.RETRANS.MAX}` (20) |
 | Execução interrompida | — (recupera na próxima execução `ok`) |
 
 Os problemas se recuperam quando o valor volta ao normal ou quando os dados param por
 `{$FLT.NODATA}` (5 min, fim do teste), e podem ser fechados manualmente.
+
+Os gatilhos têm as tags `componente` (`freeswitch`, `opensips`, `mysql`, `rede`, `cpu`,
+`memoria`, `disco`, `web`, `gerador`, `sip`) e `tipo` (`gargalo` para o recurso no limite,
+`sintoma` para o efeito visto pelo SIPp). A página **Gargalos** do dashboard (seção 19.7)
+mostra os dois juntos; o guia de leitura está em `deploy/stfc-completo/ZABBIX.md`, seção
+"Onde está o gargalo".
 
 ### 19.4 Preparação (uma vez por Zabbix)
 
@@ -1559,6 +1567,7 @@ O `zabbix setup` cria ou atualiza (idempotente) o dashboard global
 | Página | Widgets |
 |---|---|
 | Resultados | Tabela com uma linha por execução (itens `flt.result[*]` do host `<prefixo>run`: execução, status, criadas, falhas %, pico de simultâneas, pico de CPS, INVITE -> 200 médio, originadas que não chegaram ao atendedor, motivo); gráficos de CPS alvo e realizado, simultâneas, INVITE -> 100/200 e falhas/retransmissões; problemas do grupo `Flux Loadtest` |
+| Gargalos | Problemas com as tags `componente` e `tipo`, incluindo os suprimidos por manutenção; gráficos de carga contra sintoma: INVITE -> 200 x simultâneas, tempo de resposta do FS x sessões, thread mais carregada por processo, ocupação do OpenSIPS e do `load_balancer`, latência e fila do MySQL, descartes de rede, CPU por núcleo |
 | Servidores | CPU e memória por servidor, sessões e chamadas dos FreeSWITCH, memória compartilhada, diálogos e transações do OpenSIPS, consultas e CPU do MySQL, pacotes recebidos |
 
 - Os gráficos usam padrão de host (`<prefixo>*`, `<prefixo>fs*`...) e de nome de item: hosts novos entram sem refazer o dashboard.

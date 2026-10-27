@@ -134,12 +134,13 @@ save_cpu() {
 }
 
 # ---------------------------------------------------------------- rede
-NET_RB=0 NET_RP=0 NET_TB=0 NET_TP=0
+NET_RB=0 NET_RP=0 NET_TB=0 NET_TP=0 NET_RD=0 NET_TD=0
 read_net() {
-    read -r NET_RB NET_RP NET_TB NET_TP < <(awk 'NR > 2 {
+    # /proc/net/dev: recepcao bytes(2) pacotes(3) erros(4) descartes(5); envio bytes(10) pacotes(11) descartes(13)
+    read -r NET_RB NET_RP NET_TB NET_TP NET_RD NET_TD < <(awk 'NR > 2 {
             sub(/:/, " ")
-            if ($1 != "lo") { rb += $2; rp += $3; tb += $10; tp += $11 }
-        } END { printf "%d %d %d %d\n", rb, rp, tb, tp }' /proc/net/dev)
+            if ($1 != "lo") { rb += $2; rp += $3; tb += $10; tp += $11; rd += $5; td += $13 }
+        } END { printf "%d %d %d %d %d %d\n", rb, rp, tb, tp, rd, td }' /proc/net/dev)
 }
 
 UDP_ERR=0 UDP_RCVBUF=0
@@ -179,7 +180,8 @@ disk_free_pct() {
 }
 
 # ---------------------------------------------------------------- processos
-declare -A PTK=() PPTK=() G_CPU=() G_RSS=() G_THR=()
+declare -A PTK=() PPTK=() G_CPU=() G_RSS=() G_THR=() G_PIDS=()
+declare -A TTK=() PTTK=() G_MAXT=()
 UPTIME_TICKS=0
 PREV_UPTIME_TICKS=0
 
@@ -198,12 +200,13 @@ sample_procs() {
     local d comm stat rest g gname pid ticks start delta
     local -a f
     PTK=()
-    G_CPU=() G_RSS=() G_THR=()
+    G_CPU=() G_RSS=() G_THR=() G_PIDS=()
     for g in "${PROC_LIST[@]}"; do
         gname=$(proc_group_name "${g}")
         G_CPU[${gname}]=0
         G_RSS[${gname}]=0
         G_THR[${gname}]=0
+        G_PIDS[${gname}]=""
     done
     ((${#PROC_LIST[@]} > 0)) || return 0
 
@@ -232,6 +235,7 @@ sample_procs() {
             G_CPU[${gname}]=$((G_CPU[${gname}] + delta))
             G_RSS[${gname}]=$((G_RSS[${gname}] + f[21] * PAGE_KB))
             G_THR[${gname}]=$((G_THR[${gname}] + f[17]))
+            G_PIDS[${gname}]+="${pid} "
             break
         done
     done
@@ -244,6 +248,41 @@ save_procs() {
         PPTK[${k}]=${PTK[${k}]}
     done
 }
+
+# Thread mais carregada de cada grupo (ticks no intervalo, em G_MAXT). Mostra o gargalo de uma
+# thread so (loop do sofia-sip, um worker do OpenSIPS, o SIPp) que a CPU total do processo esconde.
+# O cat ignora threads que terminam entre o glob e a leitura; /proc/PID/task/TID/stat e legivel
+# por qualquer usuario. Thread nova no intervalo conta a partir da proxima amostra.
+sample_threads() {
+    local gname pid tid ticks d max
+    local -a files
+    TTK=() G_MAXT=()
+    for gname in "${!G_PIDS[@]}"; do
+        max=0
+        files=()
+        for pid in ${G_PIDS[${gname}]}; do
+            files+=("/proc/${pid}/task/"*/stat)
+        done
+        if ((${#files[@]} > 0)); then
+            while read -r tid ticks; do
+                [[ -n ${ticks} ]] || continue
+                TTK[${tid}]=${ticks}
+                if [[ -n ${PTTK[${tid}]+x} ]]; then
+                    d=$((ticks - PTTK[${tid}]))
+                    ((d > max)) && max=${d}
+                fi
+            done < <(cat "${files[@]}" 2>/dev/null | awk '{ t = $1; sub(/^.*\) /, ""); print t, $12 + $13 }')
+        fi
+        G_MAXT[${gname}]=${max}
+    done
+    PTTK=()
+    for tid in "${!TTK[@]}"; do
+        PTTK[${tid}]=${TTK[${tid}]}
+    done
+}
+
+# ms desde um instante de now_us
+ms_since() { printf '%d' $(( ($(now_us) - $1) / 1000 )); }
 
 # ---------------------------------------------------------------- servicos
 run_app() {
@@ -273,10 +312,11 @@ counter_rate() {
 
 app_header() {
     case "${ROLE}" in
-        fs)       printf ',fs_calls,fs_sessions,fs_sps,fs_idle_cpu' ;;
-        opensips) printf ',os_active_dlg,os_early_dlg,os_tm_inuse,os_rcv_req_s,os_failed_dlg_total,os_drop_req_total,os_shm_used_pct,os_load' ;;
+        fs)       printf ',fs_calls,fs_sessions,fs_sps,fs_idle_cpu,fs_api_ms,fs_db_probe_ms,fs_max_sessions,fs_sessions_pct' ;;
+        opensips) printf ',os_active_dlg,os_early_dlg,os_tm_inuse,os_rcv_req_s,os_failed_dlg_total,os_drop_req_total,os_shm_used_pct,os_load,os_lb_max_pct' ;;
         db)       printf ',db_qps,db_select_s,db_insert_s,db_update_s,db_threads_running,db_threads_connected,db_slow_total,db_row_lock_waits_total,db_repl_lag,db_repl_ok'
-                  printf ',db_wsrep_recv_queue,db_wsrep_send_queue,db_wsrep_fc_paused_pct,db_wsrep_cluster_size,db_wsrep_state,db_wsrep_primary,db_vip' ;;
+                  printf ',db_wsrep_recv_queue,db_wsrep_send_queue,db_wsrep_fc_paused_pct,db_wsrep_cluster_size,db_wsrep_state,db_wsrep_primary,db_vip'
+                  printf ',db_stmt_avg_ms,db_conn_pct' ;;
         web)      printf ',ngx_active,ngx_rps,ngx_writing,ngx_waiting,fpm_active,fpm_idle,fpm_listen_queue,fpm_rps,fpm_max_children_total,fpm_slow_total' ;;
         gen)      printf '' ;;
     esac
@@ -288,13 +328,31 @@ app_sample() {
     APP_LINE=""
     case "${ROLE}" in
     fs)
+        # Tempos de resposta do FS (inclui ~10-30 ms do fs_cli; teto em CMD_TIMEOUT):
+        #   status            nucleo e event socket, sem banco
+        #   show calls count  consulta o banco interno (core db): sobe quando faltam handles
+        #                     (max-db-handles/db-handle-timeout) ou o banco do core esta lento
+        local t0 api_ms db_ms
+        t0=$(now_us)
         out=$(run_app "show calls count")
+        db_ms=$(ms_since "${t0}")
         calls=$(printf '%s' "${out}" | grep -o '^[0-9]\+ total' | grep -o '^[0-9]\+')
+        t0=$(now_us)
         out=$(run_app "status")
+        api_ms=$(ms_since "${t0}")
+        [[ -n ${out} ]] || api_ms=""
+        [[ -n ${calls} ]] || db_ms=""
         sessions=$(printf '%s\n' "${out}" | awk '/session\(s\) - peak/ { print $1; exit }')
         sps=$(printf '%s\n' "${out}" | awk '/session\(s\) per Sec/ { print $1; exit }')
         idle=$(printf '%s\n' "${out}" | awk '/min idle cpu/ { split($4, a, "/"); print a[2]; exit }')
-        printf -v APP_LINE ',%s,%s,%s,%s' "${calls}" "${sessions}" "${sps}" "${idle}"
+        # max_sessions em uso (fsctl; muda em runtime com o fs-limites.sh) e ocupacao
+        local maxs spct=""
+        maxs=$(run_app "fsctl max_sessions" | grep -oE '[0-9]+' | tail -n 1)
+        if [[ ${maxs} =~ ^[0-9]+$ && ${sessions} =~ ^[0-9]+$ ]] && ((maxs > 0)); then
+            spct=$(fmt1 $((sessions * 1000 / maxs)))
+        fi
+        printf -v APP_LINE ',%s,%s,%s,%s,%s,%s,%s,%s' "${calls}" "${sessions}" "${sps}" "${idle}" "${api_ms}" "${db_ms}" \
+            "${maxs}" "${spct}"
         ;;
     opensips)
         local act early tmu rcv failed drop shu sht shp="" load
@@ -312,8 +370,22 @@ app_sample() {
             shp=$(fmt1 $((shu * 1000 / sht)))
         fi
         counter_rate rcv "${rcv}"
-        printf -v APP_LINE ',%s,%s,%s,%s,%s,%s,%s,%s' "${act}" "${early}" "${tmu}" \
-            "${CR}" "${failed}" "${drop}" "${shp}" "${load}"
+        # load_balancer: destino mais cheio (load / max). Perto de 100 o OpenSIPS responde
+        # 503 No FreeSWITCH Available, mesmo com o FS abaixo do max-sessions.
+        local lbp=""
+        if command -v python3 >/dev/null 2>&1; then
+            lbp=$(run_app lb_list | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+p = [r["load"] * 100.0 / r["max"] for x in d.get("Destinations", []) for r in x.get("Resources", [])
+     if isinstance(r.get("max"), int) and isinstance(r.get("load"), int) and r["max"] > 0 and r["load"] > 0]
+print("%.1f" % max(p) if p else "0.0")' 2>/dev/null)
+        fi
+        printf -v APP_LINE ',%s,%s,%s,%s,%s,%s,%s,%s,%s' "${act}" "${early}" "${tmu}" \
+            "${CR}" "${failed}" "${drop}" "${shp}" "${load}" "${lbp}"
         ;;
     db)
         local q sel ins upd thr thc slow rlw lag="" ok="" wq wsq wfc="" wcs wls wpri="" vip=""
@@ -366,8 +438,24 @@ app_sample() {
                 fi
             fi
         fi
-        printf -v APP_LINE ',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s' "${q}" "${sel}" "${ins}" "${upd}" \
-            "${thr}" "${thc}" "${slow}" "${rlw}" "${lag}" "${ok}" "${wq}" "${wsq}" "${wfc}" "${wcs}" "${wls}" "${wpri}" "${vip}"
+        # Latencia media das instrucoes no intervalo (performance_schema, todas as sessoes). Exige
+        # SELECT em performance_schema; sem permissao ou com performance_schema desligado, fica vazia.
+        local pcnt pus stmt="" cpct=""
+        read -r pcnt pus < <(run_app -N -B -e "SELECT SUM(COUNT_STAR), SUM(SUM_TIMER_WAIT) DIV 1000000 FROM performance_schema.events_statements_summary_global_by_event_name")
+        if [[ ${pcnt:-} =~ ^[0-9]+$ && ${pus:-} =~ ^[0-9]+$ ]]; then
+            if [[ -n ${APREV[pcnt]:-} ]] && ((pcnt > APREV[pcnt] && pus >= APREV[pus])); then
+                # microssegundos por instrucao -> centesimos de ms
+                stmt=$(fmt2 $(( (pus - APREV[pus]) / (pcnt - APREV[pcnt]) / 10 )))
+            fi
+            APREV[pcnt]=${pcnt}
+            APREV[pus]=${pus}
+        fi
+        if [[ ${thc} =~ ^[0-9]+$ ]] && ((DB_MAXCONN > 0)); then
+            cpct=$(fmt1 $((thc * 1000 / DB_MAXCONN)))
+        fi
+        printf -v APP_LINE ',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s' "${q}" "${sel}" "${ins}" "${upd}" \
+            "${thr}" "${thc}" "${slow}" "${rlw}" "${lag}" "${ok}" "${wq}" "${wsq}" "${wfc}" "${wcs}" "${wls}" "${wpri}" "${vip}" \
+            "${stmt}" "${cpct}"
         ;;
     web)
         local na="" nreq="" nw="" nwt="" fa="" fidle="" fq="" facc="" fmc="" fsl=""
@@ -401,24 +489,29 @@ app_sample() {
 # ---------------------------------------------------------------- laco
 header="ts,cpu_pct,cpu_max_core_pct,cpu_max_core,iowait_pct,steal_pct,softirq_pct,load1"
 header+=",mem_used_pct,mem_avail_mb,swap_used_mb"
-header+=",net_rx_mbps,net_tx_mbps,net_rx_pps,net_tx_pps,udp_in_err_s,udp_rcvbuf_err_s"
+header+=",net_rx_mbps,net_tx_mbps,net_rx_pps,net_tx_pps,udp_in_err_s,udp_rcvbuf_err_s,net_rx_drop_s,net_tx_drop_s"
 header+=",disk_rd_kbs,disk_wr_kbs,disk_busy_pct,disk_free_pct"
 for g in "${PROC_LIST[@]}"; do
     gname=$(proc_group_name "${g}")
-    header+=",${gname}_cpu_pct,${gname}_rss_mb,${gname}_threads"
+    header+=",${gname}_cpu_pct,${gname}_rss_mb,${gname}_threads,${gname}_max_thread_pct"
 done
 header+="$(app_header)"
 printf '%s\n' "${header}" || exit 0
 
 read_cpu; save_cpu
-read_net; P_RB=${NET_RB} P_RP=${NET_RP} P_TB=${NET_TB} P_TP=${NET_TP}
+read_net; P_RB=${NET_RB} P_RP=${NET_RP} P_TB=${NET_TB} P_TP=${NET_TP} P_RD=${NET_RD} P_TD=${NET_TD}
 read_udp; P_UE=${UDP_ERR} P_UR=${UDP_RCVBUF}
 read_disk
 for k in "${!DRD[@]}"; do PDRD[${k}]=${DRD[${k}]}; PDWR[${k}]=${DWR[${k}]}; PDTK[${k}]=${DTK[${k}]}; done
 read_uptime_ticks
-sample_procs; save_procs
+sample_procs; save_procs; sample_threads
 PREV_UPTIME_TICKS=${UPTIME_TICKS}
 DT_MS=$((INTERVAL * 1000))
+DB_MAXCONN=0
+if [[ ${ROLE} == db ]]; then
+    DB_MAXCONN=$(run_app -N -B -e "SELECT @@max_connections")
+    [[ ${DB_MAXCONN} =~ ^[0-9]+$ ]] || DB_MAXCONN=0
+fi
 app_sample
 PREV_US=$(now_us)
 START_S=${SECONDS}
@@ -468,7 +561,9 @@ while ((SECONDS - START_S < MAX_SECONDS)); do
     tx_mbps=$(fmt2 $(( (NET_TB - P_TB) * 8 * 100 / 1000 / DT_MS )))
     rx_pps=$(rate $((NET_RP - P_RP)))
     tx_pps=$(rate $((NET_TP - P_TP)))
-    P_RB=${NET_RB} P_RP=${NET_RP} P_TB=${NET_TB} P_TP=${NET_TP}
+    rx_drop=$(rate $((NET_RD - P_RD)))
+    tx_drop=$(rate $((NET_TD - P_TD)))
+    P_RB=${NET_RB} P_RP=${NET_RP} P_TB=${NET_TB} P_TP=${NET_TP} P_RD=${NET_RD} P_TD=${NET_TD}
     read_udp
     ue=$(rate $((UDP_ERR - P_UE)))
     ur=$(rate $((UDP_RCVBUF - P_UR)))
@@ -494,16 +589,18 @@ while ((SECONDS - START_S < MAX_SECONDS)); do
 
     line="${TS},${cpu},$(fmt1 "${max_core}"),${max_core_id},${iow},${stl},${sirq},${load1}"
     line+=",${mem_pct},${mem_avail},${swap_used}"
-    line+=",${rx_mbps},${tx_mbps},${rx_pps},${tx_pps},${ue},${ur}"
+    line+=",${rx_mbps},${tx_mbps},${rx_pps},${tx_pps},${ue},${ur},${rx_drop},${tx_drop}"
     line+=",${rd_kbs},${wr_kbs},$(fmt1 "${busy}"),${free_pct}"
 
     # Processos do servico (100% = 1 nucleo)
     read_uptime_ticks
     sample_procs
+    sample_threads
     for g in "${PROC_LIST[@]}"; do
         gname=$(proc_group_name "${g}")
         pc=$(( G_CPU[${gname}] * 100 * 1000 * 10 / CLK_TCK / DT_MS ))
-        line+=",$(fmt1 "${pc}"),$((G_RSS[${gname}] / 1024)),${G_THR[${gname}]}"
+        mt=$(( ${G_MAXT[${gname}]:-0} * 100 * 1000 * 10 / CLK_TCK / DT_MS ))
+        line+=",$(fmt1 "${pc}"),$((G_RSS[${gname}] / 1024)),${G_THR[${gname}]},$(fmt1 "${mt}")"
     done
     save_procs
     PREV_UPTIME_TICKS=${UPTIME_TICKS}
