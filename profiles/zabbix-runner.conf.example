@@ -1,0 +1,15 @@
+# profiles/zabbix-runner.conf.example - limites do disparo pelo Zabbix (bin/flux-loadtest-zbx)
+#
+# Copie para /etc/flux-loadtest/zabbix-runner.conf (opcional: sem o arquivo valem os padroes
+# abaixo). Formato CHAVE=valor, lido como dado (nunca executado).
+#
+# ZBX_MAX_CPS e ZBX_MAX_WINDOW sao tetos para todos os perfis: o wrapper recusa um perfil com
+# CPS ou janela acima deles. Ajuste abaixo do limite pratico do alvo (sessions-per-second / 2
+# para CPS, porque cada chamada de teste abre 2 sessoes no FreeSWITCH).
+
+FLT_BIN=/opt/flux-loadtest/flux-loadtest.sh
+FLT_CONF=/etc/flux-loadtest/loadtest.conf
+PROFILES_DIR=/etc/flux-loadtest/profiles.d
+STATE_FILE=/var/lib/flux-loadtest/zbx-state.json
+ZBX_MAX_CPS=50
+ZBX_MAX_WINDOW=3600

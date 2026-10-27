@@ -201,7 +201,7 @@ Perfis do STFC (deste diretório):
 | `stfc-c5000` | 5000 simultâneas a 10 CPS (hold de 500 s); exige limites maiores nos FS |
 
 O wrapper recusa CPS acima de 50 e janela acima de 3600 s
-(`/etc/flux-loadtest/zabbix-runner.conf`).
+(`/etc/flux-loadtest/zabbix-runner.conf`; exemplo em `profiles/zabbix-runner.conf.example`).
 
 ### Perfis de 3000 e 5000 simultâneas
 
