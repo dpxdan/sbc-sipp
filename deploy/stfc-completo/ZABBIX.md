@@ -199,6 +199,7 @@ Perfis do STFC (deste diretório):
 | `stfc-piloto` | 10 CPS por 60 s |
 | `stfc-cps20` | 20 CPS sustentados por ~3 min (o maior valor com atraso aceitável hoje) |
 | `stfc-cps30` | 30 CPS sustentados por ~220 s (hold de 30 s): banco, `sps` e o A1; exige `fs-limites 150 1300` |
+| `stfc-cps-escada50` | Escada de 10 a 50 CPS (+5 a cada 60 s, hold de 10 s) para achar o limite de CPS; exige `fs-limites 150 1300` e `GUARD_MAX_PDD_MS` |
 | `stfc-c1000` | 1000 simultâneas a 10 CPS |
 | `stfc-c1000-rtp` | Igual ao `stfc-c1000`, com RTP G.711 nos dois sentidos (A/B de mídia); exige DIDs com `bypass_media = 0` |
 | `stfc-c2000` | 2000 simultâneas a 10 CPS (hold de 200 s); exige limites maiores nos FS |
@@ -298,6 +299,7 @@ Os perfis de simultâneas ficam em 10 CPS e não medem o que cresce com o CPS: e
 | Perfil | Rampa | Patamar | Simultâneas | Duração total | `fs-limites.sh aplicar` (nos 2 FS) |
 |---|---|---|---|---|---|
 | `stfc-cps30` | 10 a 30 CPS em 80 s (+5 a cada 20 s) | ~220 s em 30 CPS | ~900 (hold 30 s) | ~10 min | `150 1300` |
+| `stfc-cps-escada50` | 10 a 50 CPS (+5 a cada 60 s) | 60 s por degrau, 180 s em 50 CPS | ~600 (hold 10 s) | ~16 min | `150 1300` |
 
 O `sps` do FS conta sessões, não chamadas: 30 CPS x 2 sessões x ~55% no .162 = ~33 por FS, longe
 de 150. Na página Gargalos, acompanhe `MySQL: latencia media`, `PXC: replicacao pausada por flow
