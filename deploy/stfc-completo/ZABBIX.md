@@ -197,6 +197,7 @@ Perfis do STFC (deste diretório):
 | `stfc-cps20` | 20 CPS sustentados por ~3 min (o maior valor com atraso aceitável hoje) |
 | `stfc-cps30` | 30 CPS sustentados por ~220 s (hold de 30 s): banco, `sps` e o A1; exige `fs-limites 150 1300` |
 | `stfc-c1000` | 1000 simultâneas a 10 CPS |
+| `stfc-c1000-rtp` | Igual ao `stfc-c1000`, com RTP G.711 nos dois sentidos (A/B de mídia); exige DIDs com `bypass_media = 0` |
 | `stfc-c2000` | 2000 simultâneas a 10 CPS (hold de 200 s); exige limites maiores nos FS |
 | `stfc-c3000` | 3000 simultâneas a 10 CPS (hold de 300 s); exige limites maiores nos FS |
 | `stfc-c5000` | 5000 simultâneas a 10 CPS (hold de 500 s); exige limites maiores nos FS |
