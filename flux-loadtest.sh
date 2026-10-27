@@ -36,6 +36,7 @@ readonly VERSION="1.0"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 readonly COLLECTOR="${SCRIPT_DIR}/lib/collector.sh"
+readonly CAPACITY="${SCRIPT_DIR}/lib/capacidade.sh"
 readonly SCENARIO_TPL="${SCRIPT_DIR}/scenarios/uac-did.xml.in"
 readonly UAS_TPL="${SCRIPT_DIR}/scenarios/uas-answer.xml.in"
 # porta de controle do SIPp atendedor (o originador usa a padrao, 8888)
@@ -77,6 +78,7 @@ declare -A CFG=(
     [GUARD_MAX_CORE_PCT]="0" [GUARD_HITS]="3"
     [GUARD_MAX_WSREP_FC_PCT]="10" [GUARD_MIN_WSREP_CLUSTER_SIZE]="0"
     [SAMPLE_INTERVAL]="5" [BASELINE_SECONDS]="60" [COOLDOWN_SECONDS]="60"
+    [CAPACITY_ALERT_PCT]="80"
     [RESULTS_DIR]="/var/lib/flux-loadtest/results"
     [ZABBIX_SERVER]="" [ZABBIX_PORT]="10051" [ZABBIX_HOST_PREFIX]="flt-" [ZABBIX_LIVE]="1"
     [ZABBIX_API_URL]="" [ZABBIX_API_TOKEN_FILE]="" [ZABBIX_TLS_INSECURE]="0"
@@ -117,7 +119,8 @@ validate_config() {
                MYSQL_BENCH_THREADS GUARD_MAX_CPU_PCT GUARD_MAX_GEN_CPU_PCT GUARD_MAX_MEM_PCT \
                GUARD_MIN_DISK_FREE_PCT GUARD_MAX_FAIL_PCT GUARD_MAX_REPL_LAG GUARD_MAX_CORE_PCT \
                GUARD_HITS GUARD_MAX_WSREP_FC_PCT GUARD_MIN_WSREP_CLUSTER_SIZE \
-               SAMPLE_INTERVAL BASELINE_SECONDS COOLDOWN_SECONDS ZABBIX_PORT UAS_RTP_PORT_BASE; do
+               SAMPLE_INTERVAL BASELINE_SECONDS COOLDOWN_SECONDS ZABBIX_PORT UAS_RTP_PORT_BASE \
+               CAPACITY_ALERT_PCT; do
         is_uint "${CFG[${key}]}" || die "${E_CONFIG}" "${key} deve ser inteiro: '${CFG[${key}]}'"
     done
     if [[ -n ${CFG[UAS_PORT]} ]]; then
@@ -130,6 +133,7 @@ validate_config() {
             || die "${E_CONFIG}" "UAS_RTP_PORT_BASE deve ser diferente de RTP_PORT_BASE"
     fi
     ((CFG[SAMPLE_INTERVAL] >= 1)) || die "${E_CONFIG}" "SAMPLE_INTERVAL minimo: 1"
+    ((CFG[CAPACITY_ALERT_PCT] >= 1 && CFG[CAPACITY_ALERT_PCT] <= 100)) || die "${E_CONFIG}" "CAPACITY_ALERT_PCT fora de 1-100"
     [[ ${CFG[SSH_KEY_TYPE]} == ed25519 || ${CFG[SSH_KEY_TYPE]} == rsa ]] \
         || die "${E_CONFIG}" "SSH_KEY_TYPE deve ser ed25519 ou rsa"
     [[ -z ${CFG[SSH_KNOWN_HOSTS]} || ${CFG[SSH_KNOWN_HOSTS]} == /* ]] \
@@ -481,6 +485,7 @@ INTERRUPTED=0
 REPORT_DONE=0
 SIPP_PID=""
 SIPP_SOFT_SENT=0
+CAP_PICO_PID=""
 LOAD_PID=""
 ZBX_PID=""
 declare -A COLLECTOR_PID=()
@@ -686,6 +691,7 @@ on_exit() {
         phase_end
         stop_collectors
     fi
+    capacity_wait_pico
     if [[ -n ${RUN_DIR} && -d ${RUN_DIR} ]] && ((REPORT_DONE == 0)); then
         generate_report "${RUN_DIR}" || warn "falha ao gerar o relatorio parcial"
     fi
@@ -729,6 +735,193 @@ snapshot() {
         remote_script "${id}" "${cmd}" > "${out}" 2>&1 || printf '\n(falha parcial na coleta do snapshot)\n' >> "${out}"
     done
     log "snapshots ${tag} salvos"
+}
+
+# --------------------------------------------------------------- capacidade
+# Foto dos limites e do uso de cada servidor (lib/capacidade.sh): antes da carga, no pico
+# (fim da janela de envio, com o maximo de chamadas simultaneas) e depois do cooldown.
+# Grava capacidade/<fase>-<id>.env; capacity_merge gera capacidade.csv e capacidade.txt.
+
+# Argumentos do capacidade.sh por papel.
+capacity_args() {
+    local role=$1
+    CAP_ARGS=(--role "${role}")
+    case "${role}" in
+        fs)       CAP_ARGS+=(--cmd "${CFG[FS_CLI_CMD]}" --disk "${CFG[FS_DISK_PATH]}") ;;
+        opensips) CAP_ARGS+=(--cmd "${CFG[OPENSIPS_MI_CMD]}" --disk /) ;;
+        db)       CAP_ARGS+=(--cmd "${CFG[MYSQL_CLI_CMD]}" --disk "${CFG[MYSQL_DISK_PATH]}") ;;
+        web)      CAP_ARGS+=(--disk /) ;;
+        gen)      CAP_ARGS+=(--disk "${CFG[RESULTS_DIR]}") ;;
+    esac
+}
+
+# capacity_collect FASE DIR: coleta em paralelo em todos os servidores e na VM de teste.
+capacity_collect() {
+    local fase=$1 dir="$2/capacidade" id q pid
+    local -a pids=()
+    mkdir -p "${dir}"
+    for id in "${HOST_IDS[@]}"; do
+        capacity_args "${HOST_ROLE[${id}]}"
+        printf -v q '%q ' "${CAP_ARGS[@]}"
+        # A senha do fs_cli vai como 1a linha do script no stdin (nunca no argumento do ssh).
+        {
+            if [[ ${HOST_ROLE[${id}]} == fs ]]; then
+                printf 'FS_CLI_PASSWORD=%q\n' "${FS_CLI_PASSWORD}"
+            fi
+            cat "${CAPACITY}"
+        } | timeout 60 "${SSH_CMD[@]}" -T "${CFG[SSH_USER]}@${HOST_ADDR[${id}]}" "nice -n 10 bash -s -- ${q}" \
+            > "${dir}/${fase}-${id}.env" 2> "${dir}/${fase}-${id}.err" &
+        pids+=("$!")
+    done
+    capacity_args gen
+    nice -n 10 bash "${CAPACITY}" "${CAP_ARGS[@]}" > "${dir}/${fase}-gen.env" 2> "${dir}/${fase}-gen.err" &
+    pids+=("$!")
+    for pid in "${pids[@]}"; do
+        wait "${pid}" || true
+    done
+    for id in "${HOST_IDS[@]}" gen; do
+        if [[ -s ${dir}/${fase}-${id}.err ]]; then
+            warn "capacidade ${fase} ${id}: $(head -c 200 "${dir}/${fase}-${id}.err" | tr '\n' ' ')"
+        else
+            rm -f "${dir}/${fase}-${id}.err"
+        fi
+    done
+    log "capacidade ${fase}: foto de ${#pids[@]} servidores em ${dir}"
+}
+
+# Pico em segundo plano: o laco do SIPp continua vigiando os limites enquanto coleta.
+capacity_pico_start() {
+    [[ -z ${CAP_PICO_PID} ]] || return 0
+    capacity_collect pico "${RUN_DIR}" &
+    CAP_PICO_PID=$!
+}
+
+capacity_wait_pico() {
+    [[ -n ${CAP_PICO_PID} ]] || return 0
+    wait "${CAP_PICO_PID}" 2>/dev/null || true
+    CAP_PICO_PID=""
+}
+
+# capacity_merge DIR: junta as fotos em capacidade.csv (uma linha por servidor e metrica,
+# uma coluna por fase) e capacidade.txt (alertas e tabela por servidor).
+capacity_merge() {
+    local dir=$1 hold=""
+    local -a files=()
+    [[ -d ${dir}/capacidade ]] || return 0
+    shopt -s nullglob
+    files=("${dir}"/capacidade/*.env)
+    shopt -u nullglob
+    ((${#files[@]} > 0)) || return 0
+    [[ -f ${dir}/run.env ]] && hold=$(awk -F= '$1 == "hold_s" { print $2 }' "${dir}/run.env")
+    awk -v run="${dir##*/}" -v hold="${hold}" -v lim="${CFG[CAPACITY_ALERT_PCT]}" \
+        -v hosts="${dir}/hosts.tsv" -v csv="${dir}/capacidade.csv" -v txt="${dir}/capacidade.txt" '
+        function q(x) { gsub(/"/, "\"\"", x); return "\"" x "\"" }
+        function isnum(x) { return x ~ /^-?[0-9]+(\.[0-9]+)?$/ }
+        function alert(h, m, msg) { if ((h SUBSEP m) in al) al[h, m] = al[h, m] "; " msg; else al[h, m] = msg; nal++ }
+        function val(h, m, f) { return ((h SUBSEP m SUBSEP f) in v) ? v[h, m, f] : "" }
+        BEGIN {
+            split("antes pico depois agora", order, " ")
+            # fora da tabela resumida (continuam no CSV), salvo quando tem alerta
+            noise = "^(sys_host|sys_cpus|sys_uptime_s|sys_pid_max|sys_load1|sys_rmem_max|sys_disk_path|sys_swap_used_mb|sys_threads|sys_threads_max)$"
+            noise = noise "|_pid$|_uptime_s$|_limit_nproc$|_limit_nofile$|_fds$|_tasks_current$|_running$|_group$|_enabled$"
+            noise = noise "|^os_shm_[a-z_]+_size$|^os_shm_fragments$|^os_dlg_(processed|expired|early)$|^os_load$"
+            noise = noise "|^(fs_cli|os_mi|db_cli)$|^db_(threads_running|max_used_connections|buffer_pool_mb)$|^fs_rtp_port_(start|end)$|^fs_log_size_mb$"
+            while ((getline l < hosts) > 0) {
+                split(l, c, "\t")
+                if (!(c[1] in hseen)) { nh++; hl[nh] = c[1]; hseen[c[1]] = 1 }
+                haddr[c[1]] = c[3]; hrole[c[1]] = c[2]
+            }
+        }
+        FNR == 1 {
+            f = FILENAME; sub(/^.*\//, "", f); sub(/\.env$/, "", f)
+            fase = f; sub(/-.*$/, "", fase); host = f; sub(/^[^-]*-/, "", host)
+            fseen[fase] = 1
+            if (!(host in hseen)) { nh++; hl[nh] = host; hseen[host] = 1 }
+        }
+        /^[a-z0-9_]+=/ {
+            k = $0; sub(/=.*$/, "", k); x = $0; sub(/^[^=]*=/, "", x)
+            if (k == "cap_role") { hrole[host] = x; next }
+            if (k == "cap_ts") next
+            if (!((host SUBSEP k) in mseen)) { mseen[host, k] = 1; nm[host]++; ml[host, nm[host]] = k }
+            v[host, k, fase] = x
+        }
+        END {
+            np = 0
+            for (i = 1; i <= 4; i++) if (order[i] in fseen) { np++; ph[np] = order[i] }
+            for (j = 1; j <= nh; j++) {
+                h = hl[j]
+                for (i = 1; i <= nm[h]; i++) {
+                    m = ml[h, i]; mx = ""; mn = ""
+                    for (p = 1; p <= np; p++) {
+                        x = val(h, m, ph[p])
+                        if (!isnum(x)) continue
+                        if (mx == "" || x + 0 > mx + 0) mx = x
+                        if (mn == "" || x + 0 < mn + 0) mn = x
+                    }
+                    if (m ~ /_pct$/ && mx != "") {
+                        if (m ~ /(avail|free)_pct$/) { if (mn + 0 <= 100 - lim) alert(h, m, "so " mn "% livre") }
+                        else if (mx + 0 >= lim) alert(h, m, "uso de " mx "% (alerta em " lim "%)")
+                    }
+                    if (m ~ /_rtp_timeout_sec$/ && mn != "" && mn + 0 > 0 && hold + 0 > 0 && mn + 0 <= hold + 0)
+                        alert(h, m, "timeout de midia " mn " s <= hold " hold " s: sem RTP (-M none) as chamadas caem")
+                    if (m == "fs_global_media_timeout_ms" && mn != "" && mn + 0 > 0 && hold + 0 > 0 && mn / 1000 <= hold + 0)
+                        alert(h, m, "media_timeout " mn " ms <= hold " hold " s")
+                    if (m == "fs_loglevel" && mx + 0 >= 7) alert(h, m, "loglevel debug: volume de log acompanha o CPS")
+                    if (m ~ /_running$/ && h != "gen")
+                        for (p = 1; p <= np; p++) if (val(h, m, ph[p]) == "nao") { alert(h, m, "processo nao encontrado em " ph[p]); break }
+                    if (m ~ /^(fs_cli|os_mi|db_cli)$/)
+                        for (p = 1; p <= np; p++) if (val(h, m, ph[p]) == "falha") { alert(h, m, "comando de status falhou em " ph[p]); break }
+                    if (m ~ /^(sys_udp_rcvbuf_errors|os_drop_requests|os_dlg_failed)$/) {
+                        a = val(h, m, "antes"); d = val(h, m, "depois")
+                        if (isnum(a) && isnum(d) && d - a > 0) alert(h, m, "+" (d - a) " durante a execucao")
+                    }
+                    if (m == "fs_max_sessions" || m == "fs_sps") {
+                        cm = (m == "fs_sps") ? "fs_cfg_sps" : "fs_cfg_max_sessions"
+                        for (p = 1; p <= np; p++) {
+                            x = val(h, m, ph[p]); c2 = val(h, cm, ph[p])
+                            if (isnum(x) && isnum(c2) && x != c2) { alert(h, m, "em uso " x ", switch.conf " c2 " (restart pendente ou fsctl)"); break }
+                        }
+                    }
+                    if (m == "fs_core_db_file_age_s")
+                        for (p = 1; p <= np; p++) {
+                            x = val(h, m, ph[p])
+                            if (isnum(x) && x + 0 <= 300 && val(h, "fs_cfg_core_db", ph[p]) == "odbc") {
+                                alert(h, m, "core.db escrito ha " x " s com core-db-dsn no switch.conf: restart pendente"); break
+                            }
+                        }
+                }
+            }
+            hdr = "execucao,host,endereco,papel,metrica"
+            for (p = 1; p <= np; p++) hdr = hdr "," ph[p]
+            print hdr ",alerta" > csv
+            printf "== Alertas (uso >= %s%% do limite, livre <= %s%%, timeouts, divergencias)\n", lim, 100 - lim > txt
+            if (!nal) print "  nenhum" > txt
+            for (j = 1; j <= nh; j++) {
+                h = hl[j]
+                for (i = 1; i <= nm[h]; i++) {
+                    m = ml[h, i]
+                    line = run "," h "," haddr[h] "," hrole[h] "," m
+                    for (p = 1; p <= np; p++) line = line "," val(h, m, ph[p])
+                    print line "," (((h SUBSEP m) in al) ? q(al[h, m]) : "") > csv
+                    if ((h SUBSEP m) in al) printf "  %-8s %-40s %s\n", h, m, al[h, m] > txt
+                }
+            }
+            for (j = 1; j <= nh; j++) {
+                h = hl[j]
+                if (!nm[h]) continue
+                printf "\n-- %s (%s%s)\n", h, hrole[h], haddr[h] != "" ? ", " haddr[h] : "" > txt
+                printf "  %-40s", "metrica" > txt
+                for (p = 1; p <= np; p++) printf " %24s", ph[p] > txt
+                printf "\n" > txt
+                for (i = 1; i <= nm[h]; i++) {
+                    m = ml[h, i]
+                    if (m ~ noise && !((h SUBSEP m) in al)) continue
+                    printf "  %-40s", m > txt
+                    for (p = 1; p <= np; p++) { x = val(h, m, ph[p]); printf " %24s", (x == "" ? "-" : substr(x, 1, 24)) > txt }
+                    printf "%s\n", (((h SUBSEP m) in al) ? "  <-" : "") > txt
+                }
+            }
+        }' "${files[@]}"
 }
 
 # --------------------------------------------------------------- Zabbix
@@ -942,6 +1135,7 @@ run_sip_phase() {
             if [[ -n ${ABORT_REASON} ]] || (( $(now) >= t_end )); then
                 sipp_soft_stop
                 soft_at=$(now)
+                capacity_pico_start
                 phase_end
                 phase_begin sip_drain
                 log "SIPp: sem novas chamadas; aguardando as ativas terminarem (ate $((OPT_HOLD + 60)) s)"
@@ -1338,6 +1532,11 @@ generate_report() {
             done
         fi
 
+        if [[ -d ${dir}/capacidade ]] && capacity_merge "${dir}" && [[ -s ${dir}/capacidade.txt ]]; then
+            printf '\n== Capacidade: limites e uso por servidor (resumo; todas as metricas em capacidade.csv)\n'
+            sed 's/^/  /' "${dir}/capacidade.txt"
+        fi
+
         if [[ -f ${dir}/clock.tsv ]]; then
             printf '\n== Diferenca de relogio (servidor - VM de teste, s)\n'
             sed 's/^/  /' "${dir}/clock.tsv"
@@ -1680,6 +1879,13 @@ Acoes:
                         sobe o atendedor e confere se a chamada chegou a ele)
   run [opcoes]          executa o teste completo e gera o relatorio
   report <diretorio>    regenera o report.txt de uma execucao
+  capacidade [opcoes]   foto de limites e uso de cada servidor, sem carga (somente leitura):
+                        threads, memoria, sessoes, portas RTP, timeout de midia, memoria do
+                        OpenSIPS, load_balancer e conexoes do banco. O run tira a mesma foto
+                        antes, no pico e depois (capacidade.csv no diretorio da execucao)
+      -H, --hold S      hold planejado: alerta timeout de midia menor ou igual a ele
+      --label TEXTO     rotulo do diretorio
+      --fs-password     pede a senha do fs_cli
   zabbix <sub>          integracao com o Zabbix (ZABBIX_* na configuracao):
       setup             cria os hosts e vincula os templates (--import-template importa o YAML)
       send <diretorio>  importa uma execucao (--force reenvia, --dry-run so mostra)
@@ -1739,6 +1945,7 @@ Exemplos:
   $0 smoke --did 551130001000
   $0 run --confirm-prod -r 100 -H 30 -w 600 --label c3000-cps100
   $0 run --confirm-prod -t web,mysql --web-conns 100
+  $0 capacidade --hold 500 --label antes-c5000
 EOF
 }
 
@@ -2119,6 +2326,7 @@ cmd_run() {
     fi
 
     snapshot pre
+    capacity_collect antes "${RUN_DIR}"
     max_coll=$(( CFG[BASELINE_SECONDS] + CFG[COOLDOWN_SECONDS] + OPT_WINDOW + OPT_HOLD + 180
                + (OPT_WEB_DURATION + 15) * 3 + OPT_MYSQL_DURATION * 2 + 600 ))
     start_collectors "${max_coll}"
@@ -2150,6 +2358,8 @@ cmd_run() {
 
     stop_collectors
     snapshot post
+    capacity_wait_pico
+    capacity_collect depois "${RUN_DIR}"
     [[ -z ${ABORT_REASON} ]] || printf '%s\n' "${ABORT_REASON}" > "${RUN_DIR}/abort.txt"
     generate_report "${RUN_DIR}"
     zabbix_live_stop
@@ -2160,6 +2370,43 @@ cmd_run() {
         exit "${E_ABORT}"
     fi
     log "concluido"
+}
+
+# Foto de capacidade avulsa (somente leitura), sem carga: conferencia antes de um perfil.
+cmd_capacity() {
+    local hold="" label=""
+    while (($# > 0)); do
+        case "$1" in
+            -H|--hold)      hold=${2:-}; shift 2 ;;
+            --label)        label=${2:-}; shift 2 ;;
+            --fs-password)  OPT_FS_PASSWORD_PROMPT=1; shift ;;
+            *) usage >&2; die "${E_USAGE}" "opcao invalida para capacidade: $1" ;;
+        esac
+    done
+    [[ -z ${hold} ]] || is_uint "${hold}" || die "${E_USAGE}" "--hold deve ser inteiro: '${hold}'"
+    [[ ${label} =~ ^[A-Za-z0-9._-]{0,40}$ ]] || die "${E_USAGE}" "--label: use ate 40 caracteres [A-Za-z0-9._-]"
+    check_local_deps ssh awk timeout nice
+    build_hosts
+    build_ssh
+    load_fs_password
+
+    RUN_ID="$(date +%Y%m%d-%H%M%S)-capacidade${label:+-${label}}"
+    RUN_DIR="${CFG[RESULTS_DIR]}/${RUN_ID}"
+    install -d -m 0750 "${RUN_DIR}" || die "${E_CONFIG}" "nao foi possivel criar ${RUN_DIR}"
+    {
+        printf 'execucao=%s\n' "${RUN_ID}"
+        printf 'inicio=%(%F %T %z)T\n' -1
+        if [[ -n ${hold} ]]; then
+            printf 'hold_s=%s\n' "${hold}"
+        fi
+    } > "${RUN_DIR}/run.env"
+    check_ssh_all "${RUN_DIR}/clock.tsv" || warn "SSH falhou em algum servidor: a foto fica incompleta"
+    write_hosts_tsv
+    capacity_collect agora "${RUN_DIR}"
+    capacity_merge "${RUN_DIR}"
+    [[ -s ${RUN_DIR}/capacidade.txt ]] && cat "${RUN_DIR}/capacidade.txt"
+    log "arquivos: ${RUN_DIR}/capacidade.csv e ${RUN_DIR}/capacidade.txt"
+    RUN_DIR=""
 }
 
 main() {
@@ -2174,7 +2421,7 @@ main() {
     done
     case "${action}" in
         ""|-h|--help|help) usage; exit 0 ;;
-        check|smoke|run|report|keys|zabbix) ;;
+        check|smoke|run|report|keys|zabbix|capacidade) ;;
         *) usage >&2; die "${E_USAGE}" "acao invalida: ${action}" ;;
     esac
     if [[ ${action} == report ]]; then
@@ -2202,6 +2449,7 @@ main() {
             cmd_smoke
             ;;
         run) cmd_run "${rest[@]+"${rest[@]}"}" ;;
+        capacidade) cmd_capacity "${rest[@]+"${rest[@]}"}" ;;
         zabbix) cmd_zabbix "${rest[@]+"${rest[@]}"}" ;;
     esac
 }
