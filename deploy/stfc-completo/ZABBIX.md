@@ -39,7 +39,10 @@ gráfico de carga contra sintoma por componente. Os problemas trazem duas tags:
   `mysql`, `rede`, `cpu`, `memoria`, `disco`, `web` ou `gerador`.
 
 O widget de problemas mostra também os suprimidos: os hosts `flt-*` ficam numa manutenção com
-coleta (seção 6) e, sem isso, nada apareceria.
+coleta (seção 6) e, sem isso, nada apareceria. Ele fica no modo histórico: os gatilhos recuperam
+por `nodata` 5 min depois do fim do teste e, no modo padrão (problemas recentes), sumiriam do
+widget. No histórico, os resolvidos continuam listados com início e fim, para casar com a linha da
+execução na tabela de resultados.
 
 Como ler um sintoma (o gatilho "Atendimento lento: INVITE -> 200 acima de 1000 ms"):
 
