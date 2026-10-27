@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 #
 # install/prepare.sh - modo "prepare" do flux-host.sh (WEB-1437): pre-requisitos do
-# flux-loadtest em servidores existentes, como os do STFC (README, secao 6).
+# flux-loadtest em servidores existentes, como os do STFC (docs/instalacao/servidores.md).
 #
 # Nunca instala, atualiza, reconfigura ou reinicia FreeSWITCH, OpenSIPS ou MySQL/PXC, e nao
 # toca em datadir, vhosts ou pools existentes. Cada alteracao passa por:
@@ -306,7 +306,7 @@ zbx_agent_audit() {
     log "agentd: include do flux-loadtest em ${PREP_ZBX_INCLUDE} (Include= do ${PREP_ZBX_AGENT_CONF})"
 }
 
-# Servidor de testes: zabbix-agentd + flux-loadtest-zbx para o disparo pelo Zabbix (README 19.6).
+# Servidor de testes: zabbix-agentd + flux-loadtest-zbx para o disparo pelo Zabbix (docs/configuracao/zabbix.md).
 # Agent ja instalado (servidor monitorado): o zabbix_agentd.conf nao e alterado; so o include,
 # o wrapper e o sudoers sao gravados.
 prep_zabbix_agent() {

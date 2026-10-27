@@ -1,4 +1,4 @@
-# profiles/cps10.conf - degrau de 10 CPS com RTP (README, secao 8.3)
+# profiles/cps10.conf - degrau de 10 CPS com RTP (docs/execucao/degraus-e-perfis.md)
 # Equivale a: flux-loadtest.sh run --confirm-prod -y -t sip -r 10 -H 20 -w 300
 
 DESC="SIP 10 CPS por 300 s, hold 20 s, RTP"

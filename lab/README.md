@@ -149,8 +149,8 @@ desativa o host padrão "Zabbix server" (a imagem não tem agente). A configura�
 (`out/loadtest.conf`) já vem com `ZABBIX_*`, então todo `run` envia as amostras ao vivo.
 
 No frontend: *Monitoramento > Hosts*, grupo `Flux Loadtest`; os gráficos ficam em cada
-host (`lab-run` tem SIPp, wrk e sysbench). Detalhes dos templates na seção 19 do
-README principal.
+host (`lab-run` tem SIPp, wrk e sysbench). Detalhes dos templates em
+[`docs/configuracao/zabbix.md`](../docs/configuracao/zabbix.md).
 
 O histórico fica no volume `flux-stfc-lab_zbx-db-7.2.3-pg16` (um por versão do Zabbix e
 do PostgreSQL, porque nenhum dos dois volta de versão) e sobrevive ao `down`; para
