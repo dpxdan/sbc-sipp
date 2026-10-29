@@ -193,6 +193,11 @@ param_val() {
     grep -oE "name=\"$1\"[[:space:]]+value=\"[^\"]*\"" <<< "$2" | head -n 1 | sed -E 's/.*value="([^"]*)"/\1/'
 }
 
+# thread_ticks PID -> "TID ticks nome" de cada thread (utime + stime, campos 14 e 15 do stat)
+thread_ticks() {
+    cat /proc/"$1"/task/*/stat 2>/dev/null | awk '{ t = $1; n = $2; sub(/^.*\) /, ""); print t, $12 + $13, n }'
+}
+
 # ping_stats ALVO N -> "media/max/perda%" em ms
 ping_stats() {
     local out loss rtt avg mx
@@ -346,12 +351,25 @@ if ((LOAD_AT > 0)); then
     kv isql_load "${r}"
     pid=$(pidof freeswitch 2>/dev/null | awk '{ print $1 }')
     if [[ -n ${pid} ]]; then
+        # Direto do /proc, como o lib/collector.sh: o top -H mostra na linha do TID = PID o
+        # acumulado do processo inteiro (TIME+ e %CPU), que parece uma thread saturada.
+        t0=$(date +%s%N)
+        thread_ticks "${pid}" > "${TMPD}/thr.1"
+        sleep 1
+        thread_ticks "${pid}" > "${TMPD}/thr.2"
+        t1=$(date +%s%N)
         echo
-        # segunda amostra: a primeira do top cobre um intervalo curto demais e satura em 100%
-        echo "threads do FreeSWITCH com mais CPU (top -H, media de 1 s):"
-        top -H -b -d 1 -n 2 -p "${pid}" 2>/dev/null | awk '/^[[:space:]]*PID[[:space:]]/ { n++ } n == 2' | head -n 16
+        echo "threads do FreeSWITCH com mais CPU no intervalo (% de um nucleo; TID, %, nome):"
+        awk -v hz="$(getconf CLK_TCK)" -v el="$((t1 - t0))" -v pid="${pid}" '
+            NR == FNR { p[$1] = $2; next }
+            ($1 in p) { d = ($2 - p[$1]) * 100 / hz / (el / 1e9); tot += d
+                        if (d > 0) printf "%-10s %6.1f  %s%s\n", $1, d, $3, ($1 == pid ? " (thread principal)" : "") }
+            END { printf "%-10s %6.1f  processo inteiro\n", "total", tot }' "${TMPD}/thr.1" "${TMPD}/thr.2" \
+            | sort -k2 -nr | head -n 13
     fi
 fi
+# o ultimo pipeline (sort | head) pode sair com SIGPIPE; a coleta em si terminou bem
+exit 0
 REMOTE
 }
 
@@ -417,6 +435,7 @@ sec "Delta por consulta, 30 maiores em tempo (execucoes, s, ms medio, consulta)"
 awk -F'\t' 'NR == FNR { n[$1] = $2; t[$1] = $3; next }
     { dn = $2 - n[$1]; dt = ($3 - t[$1]) / 1e12; if (dn > 0) printf "%9d %9.1f %8.2f  %s\n", dn, dt, dt * 1000 / dn, $4 }' \
     "${TMPD}/d1" "${TMPD}/d2" | sort -k2 -nr | head -n 30
+exit 0
 REMOTE
 }
 
