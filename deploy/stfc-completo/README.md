@@ -34,6 +34,7 @@ Arquivos deste diretório:
 | `preflight-165.sh` | .165 (somente leitura) |
 | `preflight-sbc.sh` | .163 e .162 (somente leitura) |
 | `fs-limites.sh` | .163 e .162: limites do FreeSWITCH em runtime (`mostrar`, `aplicar`, `restaurar`) |
+| `diag-fs-gargalo.sh` | .165 (somente leitura): diagnóstico do teto de CPS por FS em todos os FS e bancos, com resultado em Markdown (`docs/execucao/gargalo-fs.md`) |
 | `sql/00-verificacao.sql` | Banco, nó 1 (somente leitura) |
 | `sql/10-opensips-address-add.sql`, `sql/90-opensips-address-remove.sql` | Banco: libera ou remove o .165 como operadora |
 | `sql/20-dids-create.sql`, `sql/95-dids-remove.sql` | Banco: massa de DIDs de teste |

@@ -67,6 +67,7 @@ nav:
       - Runbook do STFC: execucao/runbook-stfc.md
       - FreeSWITCH direto: execucao/fs-direto.md
       - A/B do core db: execucao/ab-core-db.md
+      - Gargalo do FS .162: execucao/gargalo-fs.md
       - Encerramento e reversão: execucao/encerramento.md
   - Resultados:
       - Arquivos e relatório: resultados/arquivos.md
