@@ -115,6 +115,9 @@ timeout 300 tcpdump -i ens192 -nn -s0 -w /root/fs2.pcap 'udp port 5070'
 python3 /opt/flux-loadtest/deploy/stfc-completo/pdd-pcap.py /root/fs2.pcap --fs 200.159.177.162:5070 --faixa 60
 ```
 
+No `.163`, capture na `lo` (`tcpdump -i lo ...`): o FS conversa com o OpenSIPS da mesma máquina e as duas
+pernas não passam pela `ens192`.
+
 | Trecho | Do | Até | Inclui |
 |---|---|---|---|
 | Trying | INVITE da perna A recebido | 100 Trying enviado | Fila do sofia-sip |

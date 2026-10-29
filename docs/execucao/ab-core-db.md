@@ -36,10 +36,12 @@ Schema do core db no PXC, no `.163` (campo `Database` do DSN):
 grep -A10 '^\[FLUX\]' /etc/odbc.ini
 ```
 
-Foto do `performance_schema` no db1 (`.161`), somente leitura. Troque `SCHEMA_DO_CORE_DB`:
+Foto do `performance_schema` no db1 (`.161`), somente leitura. Os contadores são acumulados desde a
+partida do MySQL e dominados pelas consultas da interface web; o que interessa é o delta da escada, então
+a foto guarda o identificador de cada consulta (`DIGEST`) para a subtração depois:
 
 ```bash
-mysql -t -e "SELECT LEFT(DIGEST_TEXT, 100) AS stmt, COUNT_STAR AS n, ROUND(AVG_TIMER_WAIT/1e9, 2) AS avg_ms, ROUND(SUM_TIMER_WAIT/1e12, 1) AS total_s FROM performance_schema.events_statements_summary_by_digest WHERE SCHEMA_NAME = 'SCHEMA_DO_CORE_DB' ORDER BY SUM_TIMER_WAIT DESC LIMIT 20" > /root/core-db-antes.txt
+mysql -N -B -e "SELECT DIGEST, COUNT_STAR, SUM_TIMER_WAIT, LEFT(DIGEST_TEXT, 100) FROM performance_schema.events_statements_summary_by_digest WHERE DIGEST IS NOT NULL" > /root/ps-antes.tsv
 ```
 
 ### Durante
@@ -50,14 +52,26 @@ Capturas, iniciadas antes do disparo e encerradas depois do fim da execução (C
 |---|---|
 | `.165` | `tcpdump -i ens192 -nn -s0 -w /root/fina-gen.pcap 'udp port 5060 or udp port 5090'` |
 | `.162` | `tcpdump -i ens192 -nn -s0 -w /root/fina-fs2.pcap 'udp port 5070'` |
-| `.163` | `tcpdump -i ens192 -nn -s0 -w /root/fina-fs1.pcap 'udp port 5070'` |
+| `.163` | `tcpdump -i lo -nn -s0 -w /root/fina-fs1.pcap 'udp port 5070'` |
 
-No `.163` só o FS: o OpenSIPS fica no 5060. Confira o nome da interface com `ip -br addr`.
+No `.163`, o OpenSIPS e o FS ficam na mesma máquina: as duas pernas do FS (OpenSIPS -> FS e o bridge
+FS -> OpenSIPS) passam pela `lo`, não pela `ens192`. Uma captura na `ens192` do `.163` com o mesmo
+filtro só mostra a conversa do OpenSIPS com o FS do `.162`: serve como segunda visão do `.162`, mas o
+`pdd-pcap.py --fs 200.159.177.163:5070` não acha nenhuma chamada nela. Confira o nome da interface do
+`.162` e do `.165` com `ip -br addr`.
 
 ### Depois
 
-Mesma consulta do `performance_schema`, gravando em `/root/core-db-depois.txt`. O delta de `n` e de
-`total_s` entre os dois arquivos é o que a escada gerou.
+Mesma consulta do `performance_schema`, gravando em `/root/ps-depois.tsv`. O delta entre as duas fotos,
+ordenado pelo tempo total gasto na escada (execuções, segundos, média em ms e a consulta):
+
+```bash
+awk -F'\t' 'NR == FNR { n[$1] = $2; t[$1] = $3; next } { dn = $2 - n[$1]; dt = ($3 - t[$1]) / 1e12; if (dn > 0) printf "%9d %9.1f %8.2f  %s\n", dn, dt, dt * 1000 / dn, $4 }' /root/ps-antes.tsv /root/ps-depois.tsv | sort -k2 -nr | head -25
+```
+
+Divida as execuções pelo total de chamadas da escada para ter as consultas por chamada. Consultas da pilha
+SIP (`sip_dialogs`, `sip_registrations`, `sip_presence`) com média alta apontam para presença no banco
+(`manage-presence` com `odbc-dsn`) dentro da thread do perfil.
 
 Leitura:
 
