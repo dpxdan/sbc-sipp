@@ -106,7 +106,12 @@ Opções:
 | `--consultas N` | 2000 | `SELECT 1` pelo `isql` na medição ociosa |
 | `--schema NOME` | `FLUX_DB_NAME` | schema das tabelas `sip_*` |
 
-Saída 0: todos os servidores responderam. Saída 5: algum falhou, com o motivo no arquivo.
+Saída 0: todos os servidores responderam. Saída 5: algum falhou, com o motivo no arquivo. Saída 130:
+interrompido por Ctrl+C, TERM ou HUP; as coletas são encerradas e o relatório sai parcial.
+
+As saídas brutas de cada servidor ficam em `ARQUIVO.parcial/`, ao lado do resultado e fora do `/tmp`.
+O diretório é apagado quando tudo dá certo e mantido em caso de falha ou interrupção. Se ele já existir,
+o script se recusa a rodar: confira o conteúdo e remova antes de repetir com o mesmo `-o`.
 
 ### Permissões
 

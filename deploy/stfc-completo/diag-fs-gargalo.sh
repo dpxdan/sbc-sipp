@@ -29,12 +29,17 @@
 # Requisitos: os do flux-loadtest (usuario SSH, sudo -n para fs_cli, MYSQL_CLI_CMD com SELECT
 # em performance_schema e no schema do Flux) e isql (pacote unixodbc) nos FS.
 #
-# Saida: 0 = todos os servidores responderam; 5 = algum servidor falhou (detalhes no arquivo).
+# Saidas brutas de cada servidor ficam em ARQUIVO.parcial/ (fora do /tmp) ate o relatorio ser
+# gravado; com falha ou interrupcao, o diretorio e mantido. Ctrl+C, TERM ou HUP encerram as
+# coletas e gravam o relatorio parcial.
+#
+# Saida: 0 = todos os servidores responderam; 5 = algum servidor falhou (detalhes no arquivo);
+# 130 = interrompido (relatorio parcial).
 
 set -Eeuo pipefail
 export LC_ALL=C
 
-readonly E_USAGE=2 E_CONFIG=3 E_DEPS=4 E_REMOTE=5
+readonly E_USAGE=2 E_CONFIG=3 E_DEPS=4 E_REMOTE=5 E_INTERRUPTED=130
 
 log()  { printf '[%(%H:%M:%S)T] %s\n' -1 "$*" >&2; }
 warn() { printf '[%(%H:%M:%S)T] AVISO: %s\n' -1 "$*" >&2; }
@@ -342,8 +347,9 @@ if ((LOAD_AT > 0)); then
     pid=$(pidof freeswitch 2>/dev/null | awk '{ print $1 }')
     if [[ -n ${pid} ]]; then
         echo
-        echo "threads do FreeSWITCH com mais CPU (top -H):"
-        top -H -b -n 1 -p "${pid}" 2>/dev/null | sed -n '7,22p'
+        # segunda amostra: a primeira do top cobre um intervalo curto demais e satura em 100%
+        echo "threads do FreeSWITCH com mais CPU (top -H, media de 1 s):"
+        top -H -b -d 1 -n 2 -p "${pid}" 2>/dev/null | awk '/^[[:space:]]*PID[[:space:]]/ { n++ } n == 2' | head -n 16
     fi
 fi
 REMOTE
@@ -414,18 +420,42 @@ awk -F'\t' 'NR == FNR { n[$1] = $2; t[$1] = $3; next }
 REMOTE
 }
 
-# run_job ID ENDERECO TIMEOUT SCRIPT -> TMP/ID.out, TMP/ID.err, TMP/ID.rc
+# run_job ID ENDERECO TIMEOUT SCRIPT -> WORK/ID.out, WORK/ID.err, WORK/ID.rc
 run_job() {
-    local id=$1 addr=$2 tmo=$3 script=$4 rc=0
+    local id=$1 addr=$2 tmo=$3 script=$4 rc=0 tp term=0
     printf '%s\n' "${script}" | timeout "${tmo}" "${SSH_CMD[@]}" -T "${CFG[SSH_USER]}@${addr}" bash -s \
-        > "${TMP}/${id}.out" 2> "${TMP}/${id}.err" || rc=$?
-    printf '%s\n' "${rc}" > "${TMP}/${id}.rc"
+        > "${WORK}/${id}.out" 2> "${WORK}/${id}.err" &
+    tp=$!
+    # TERM do on_signal: repassa ao timeout, que encerra o ssh, e espera ele sair
+    trap 'term=1; kill -TERM "${tp}" 2>/dev/null' TERM
+    wait "${tp}" || rc=$?
+    if ((term)); then
+        rc=0
+        wait "${tp}" || rc=$?
+    fi
+    printf '%s\n' "${rc}" > "${WORK}/${id}.rc"
+}
+
+# Codigo de saida da coleta; "-" quando ela nao terminou (interrompida ou diretorio removido).
+rc_of() {
+    local f="${WORK}/$1.rc"
+    if [[ -r ${f} ]]; then cat "${f}"; else echo "-"; fi
+}
+
+rc_text() {
+    case $1 in
+        124) echo "tempo esgotado" ;;
+        143) echo "interrompida" ;;
+        -) echo "sem resultado: a coleta nao terminou" ;;
+        *) echo "codigo $1" ;;
+    esac
 }
 
 kv_get() { awk -F'\t' -v k="@kv $2" '$1 == k { print $2; exit }' "$1" 2>/dev/null; }
 
 # Saida remota em Markdown: "@sec" vira titulo, o resto vai em bloco de texto.
 render_raw() {
+    [[ -r $1 ]] || return 0
     awk '
         /^@kv / { next }
         /^@sec / { if (open) print "```"; sub(/^@sec /, ""); printf "\n#### %s\n\n```text\n", $0; open = 1; next }
@@ -436,8 +466,9 @@ render_raw() {
 cell() { local v=${1:--}; printf '%s' "${v//|//}"; }
 
 write_report() {
-    local id addr
+    local interrupted=$1 id addr rc
     printf '# Diagnostico do teto de CPS por FreeSWITCH\n\n'
+    ((interrupted)) && printf '**Execucao interrompida: relatorio parcial.**\n\n'
     printf -- '- gerado em: %s, no %s\n' "$(date '+%Y-%m-%d %H:%M:%S %z')" "$(hostname)"
     # shellcheck disable=SC2016
     printf -- '- configuracao: `%s`\n' "${OPT_CONF}"
@@ -456,7 +487,7 @@ write_report() {
     printf '| FS | hostname | manage-presence | DSN | servidor do DSN | driver | core db | RTT ate | RTT ocioso (media/max/perda, ms) | isql ocioso (ms/consulta) | RTT sob carga | isql sob carga | chamadas sob carga |\n'
     printf '|---|---|---|---|---|---|---|---|---|---|---|---|---|\n'
     for id in "${FS_IDS[@]}"; do
-        local f="${TMP}/${id}.out"
+        local f="${WORK}/${id}.out"
         printf '| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n' "${ADDR[${id}]}" \
             "$(cell "$(kv_get "${f}" hostname)")" "$(cell "$(kv_get "${f}" manage_presence)")" \
             "$(cell "$(kv_get "${f}" dsn)")" "$(cell "$(kv_get "${f}" dsn_server)")" \
@@ -485,16 +516,51 @@ EOF
     for id in "${FS_IDS[@]}" "${DB_IDS[@]}"; do
         addr=${ADDR[${id}]}
         printf '\n## %s (%s)\n' "${id}" "${addr}"
-        if [[ $(cat "${TMP}/${id}.rc") != 0 ]]; then
-            printf '\nFalha na execucao remota (codigo %s; 124 = tempo esgotado).\n' "$(cat "${TMP}/${id}.rc")"
+        rc=$(rc_of "${id}")
+        if [[ ${rc} != 0 ]]; then
+            printf '\nColeta incompleta (%s).\n' "$(rc_text "${rc}")"
         fi
-        render_raw "${TMP}/${id}.out"
-        if [[ -s ${TMP}/${id}.err ]]; then
+        render_raw "${WORK}/${id}.out"
+        if [[ -s ${WORK}/${id}.err ]]; then
             printf '\n#### stderr\n\n```text\n'
-            head -n 40 "${TMP}/${id}.err"
+            head -n 40 "${WORK}/${id}.err"
             printf '```\n'
         fi
     done
+}
+
+# finish INTERROMPIDO -> grava o relatorio; 1 se alguma coleta falhou ou nao terminou
+finish() {
+    local interrupted=$1 id rc failed=0
+    write_report "${interrupted}" > "${OPT_OUT}"
+    for id in "${FS_IDS[@]}" "${DB_IDS[@]}"; do
+        rc=$(rc_of "${id}")
+        if [[ ${rc} != 0 ]]; then
+            warn "${id} (${ADDR[${id}]}): coleta incompleta ($(rc_text "${rc}"))"
+            failed=1
+        elif grep -q $'^@kv erro\t' "${WORK}/${id}.out"; then
+            warn "${id} (${ADDR[${id}]}): $(kv_get "${WORK}/${id}.out" erro)"
+        fi
+    done
+    log "resultado: ${OPT_OUT}"
+    if ((failed || interrupted)); then
+        log "saidas brutas mantidas em ${WORK}"
+    else
+        rm -rf -- "${WORK}"
+    fi
+    return "${failed}"
+}
+
+# Ctrl+C, TERM ou HUP: encerra as coletas (os jobs em background ignoram o SIGINT e seguiriam
+# sem o processo principal; o TERM chega ao run_job, que o repassa ao timeout) e grava o
+# relatorio parcial.
+on_signal() {
+    trap - INT TERM HUP
+    warn "interrompido: encerrando as coletas e gravando o relatorio parcial"
+    kill -TERM "${PIDS[@]}" 2>/dev/null || true
+    wait "${PIDS[@]}" 2>/dev/null || true
+    finish 1 || true
+    exit "${E_INTERRUPTED}"
 }
 
 main() {
@@ -513,9 +579,10 @@ main() {
     [[ -n ${OPT_OUT} ]] || OPT_OUT="${PWD}/diag-fs-$(date +%Y%m%d-%H%M%S).md"
     [[ -e ${OPT_OUT} ]] && die "${E_USAGE}" "arquivo de saida ja existe: ${OPT_OUT}"
     [[ -w $(dirname "${OPT_OUT}") ]] || die "${E_USAGE}" "sem permissao para gravar em $(dirname "${OPT_OUT}")"
-
-    TMP=$(mktemp -d)
-    trap 'rm -rf "${TMP}"' EXIT
+    # Fora do /tmp: uma limpeza do /tmp durante a janela nao apaga as coletas em andamento.
+    WORK="${OPT_OUT}.parcial"
+    [[ -e ${WORK} ]] && die "${E_USAGE}" "diretorio de trabalho ja existe: ${WORK} (sobra de execucao interrompida; confira e remova)"
+    mkdir -m 700 "${WORK}" || die "${E_USAGE}" "nao foi possivel criar ${WORK}"
 
     START=$(date +%s)
     LOAD_AT=0
@@ -523,18 +590,19 @@ main() {
     local longest=$((OPT_WINDOW > OPT_LOAD ? OPT_WINDOW : OPT_LOAD))
 
     declare -gA ADDR=()
-    FS_IDS=() DB_IDS=()
-    local -a list pids=()
+    FS_IDS=() DB_IDS=() PIDS=()
+    local -a list
     local h i=0 id script fs_tmo db_tmo
     fs_tmo=$((OPT_PING / 5 + OPT_QUERIES / 20 + 240 + OPT_LOAD))
     db_tmo=$((180 + OPT_WINDOW))
     script=$(fs_script)
+    trap on_signal INT TERM HUP
     read -ra list <<< "${CFG[FS_HOSTS]}"
     for h in "${list[@]}"; do
         [[ ${h} =~ ^[A-Za-z0-9._:-]+$ ]] || die "${E_CONFIG}" "endereco invalido em FS_HOSTS: '${h}'"
         i=$((i + 1)); id="fs${i}"; FS_IDS+=("${id}"); ADDR[${id}]=${h}
         run_job "${id}" "${h}" "${fs_tmo}" "${script}" &
-        pids+=($!)
+        PIDS+=($!)
     done
     i=0
     read -ra list <<< "${CFG[DB_HOSTS]}"
@@ -542,26 +610,16 @@ main() {
         [[ ${h} =~ ^[A-Za-z0-9._:-]+$ ]] || die "${E_CONFIG}" "endereco invalido em DB_HOSTS: '${h}'"
         i=$((i + 1)); id="db${i}"; DB_IDS+=("${id}"); ADDR[${id}]=${h}
         run_job "${id}" "${h}" "${db_tmo}" "$(db_script $((i == 1)))" &
-        pids+=($!)
+        PIDS+=($!)
     done
 
     log "coletando de ${#FS_IDS[@]} FS e ${#DB_IDS[@]} banco(s); duracao estimada ate $((OPT_PING / 5 + longest + 60)) s"
     ((OPT_WINDOW > 0 || OPT_LOAD > 0)) && log "dispare a escada agora; medicao sob carga em ${OPT_LOAD} s, janela de ${OPT_WINDOW} s"
-    wait "${pids[@]}" || true
+    # sinal tratado durante o wait: o wait retorna e o on_signal assume
+    wait "${PIDS[@]}" || true
+    trap - INT TERM HUP
 
-    write_report > "${OPT_OUT}"
-
-    local failed=0
-    for id in "${FS_IDS[@]}" "${DB_IDS[@]}"; do
-        if [[ $(cat "${TMP}/${id}.rc") != 0 ]]; then
-            warn "${id} (${ADDR[${id}]}): execucao remota falhou (codigo $(cat "${TMP}/${id}.rc"))"
-            failed=1
-        elif grep -q $'^@kv erro\t' "${TMP}/${id}.out"; then
-            warn "${id} (${ADDR[${id}]}): $(kv_get "${TMP}/${id}.out" erro)"
-        fi
-    done
-    log "resultado: ${OPT_OUT}"
-    ((failed == 0)) || exit "${E_REMOTE}"
+    finish 0 || exit "${E_REMOTE}"
 }
 
 main "$@"
