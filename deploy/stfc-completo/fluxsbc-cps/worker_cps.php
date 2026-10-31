@@ -8,13 +8,13 @@
 // So conta "Call-Direction" no inicio da linha: o evento traz tambem "Presence-Call-Direction",
 // e um strpos em qualquer posicao contaria 2 por perna.
 //
-// Senha do event socket: /etc/fluxsbc/event_socket.pass (root, 0600), nunca neste arquivo.
+// Senha do event socket: /etc/flux-loadtest/fs_cli.pass (root, 0600), nunca neste arquivo.
 // Variaveis so para testes: FLUXSBC_CPS_PASS_FILE, FLUXSBC_CPS_DIR, FLUXSBC_CPS_PORT.
 // Codigos de saida: 3 senha ou autenticacao, 5 conexao ou gravacao. O systemd reinicia.
 
 $host = '127.0.0.1';
 $port = (int) (getenv('FLUXSBC_CPS_PORT') ?: 8021);
-$pass_file = getenv('FLUXSBC_CPS_PASS_FILE') ?: '/etc/fluxsbc/event_socket.pass';
+$pass_file = getenv('FLUXSBC_CPS_PASS_FILE') ?: '/etc/flux-loadtest/fs_cli.pass';
 $dir = getenv('FLUXSBC_CPS_DIR') ?: '/dev/shm';
 $inbound_file = $dir . '/fluxsbc_inbound_total';
 $outbound_file = $dir . '/fluxsbc_outbound_total';
