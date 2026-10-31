@@ -216,17 +216,24 @@ alguns segundos sem coleta; nenhum dos dois afeta chamadas.
 Senha do event socket (o `read` não mostra a senha na tela):
 
 ```bash
-install -d -m 0700 /etc/fluxsbc && install -m 0600 /dev/null /etc/fluxsbc/event_socket.pass && read -rs -p 'Senha do event socket: ' S && printf '%s\n' "$S" > /etc/fluxsbc/event_socket.pass && unset S && echo
+install -d -m 0750 /etc/flux-loadtest && install -m 0600 /dev/null /etc/flux-loadtest/fs_cli.pass && read -rs -p 'Senha do event socket: ' S && printf '%s\n' "$S" > /etc/flux-loadtest/fs_cli.pass && unset S && echo
 ```
 
 Worker:
 
 ```bash
-install -d -m 0755 /opt/fluxsbc && install -m 0644 /opt/flux-loadtest/deploy/stfc-completo/fluxsbc-cps/worker_cps.php /opt/fluxsbc/worker_cps.php && php -l /opt/fluxsbc/worker_cps.php
+mkdir -p /opt/flux/misc && install -m 0644 /opt/flux-loadtest/deploy/stfc-completo/fluxsbc-cps/worker_cps.php /opt/flux/misc/worker_cps.php && php -l /opt/flux/misc/worker_cps.php
 ```
 
 ```bash
 install -m 0644 /opt/flux-loadtest/deploy/stfc-completo/fluxsbc-cps/fluxsbc-cps.service /etc/systemd/system/fluxsbc-cps.service && systemctl daemon-reload && systemctl enable fluxsbc-cps && systemctl restart fluxsbc-cps && systemctl status fluxsbc-cps --no-pager
+```
+
+Se existir o script antigo em `/opt/fluxsbc/`, apague-o depois de confirmar o serviço novo, porque ele tem a
+senha do event socket no código. O `rmdir` só remove o diretório se estiver vazio:
+
+```bash
+rm /opt/fluxsbc/worker_cps.php && rmdir /opt/fluxsbc
 ```
 
 UserParameter. O agent não sobe com a mesma chave definida duas vezes, então confira antes e não repita
@@ -270,5 +277,5 @@ segundo` na página Servidores do dashboard de resultados.
 
 Em bridge normal, somando os nós: Inbound = CPS do SIPp, Outbound = Inbound e SPS = 2 x Inbound.
 
-Ao trocar a senha do event socket, atualize `/etc/fluxsbc/event_socket.pass` e reinicie o worker. Com a senha
+Ao trocar a senha do event socket, atualize `/etc/flux-loadtest/fs_cli.pass` em cada FS e reinicie o worker. Com a senha
 errada, ele registra a recusa no `journalctl -u fluxsbc-cps` e os contadores param.
