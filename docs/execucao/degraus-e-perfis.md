@@ -84,6 +84,7 @@ equivalem às opções do `run`).
 | `stfc-cps-escada200` | Escada de 100 a 200 CPS (+20 a cada 60 s), mais 180 s em 200, hold 10 s (~2000 simultâneas) | ~13 min | `250 2800` |
 | `stfc-cps-escada300` | Escada de 150 a 300 CPS (+30 a cada 60 s), mais 180 s em 300, hold 10 s (~3000 simultâneas) | ~13 min | `350 4200` |
 | `stfc-cps-livre` | CPS escolhido no menu, de 10 a 300: rampa de CPS/2 a CPS em 5 degraus de 60 s, mais 180 s no alvo, hold 10 s | ~13 min | Mostrado pelo Plano |
+| `stfc-cps-por-fs` | CPS **por FS** escolhido no menu, de 10 a 150: envia valor x 2 ao OpenSIPS, com a mesma rampa do `stfc-cps-livre` (de 50 por FS: 100 no sistema) | ~13 min | Mostrado pelo Plano |
 | `stfc-c1000` | 1000 simultâneas a 10 CPS (janela 150 s, hold 100 s) | ~9 min | — |
 | `stfc-c1000-rtp` | Igual ao `stfc-c1000`, com `MEDIA=rtp` (G.711 nos dois sentidos) | ~9 min | — |
 | `stfc-c2000` | 2000 simultâneas a 10 CPS (janela 320 s, hold 200 s, 120 s no patamar, `-l` 2448) | ~13 min | `150 2800` |
@@ -183,6 +184,22 @@ simultâneas = CPS x 10: as combinações 100/1000, 200/2000 e 300/3000 da issue
     `ZBX_MAX_CPS=300` só permite o disparo. A capacidade medida é de 50 CPS (28/10/2026) e, sem os
     ajustes acima, a expectativa é o guard parar a escada: o patamar em que ele parou é o resultado.
 
+### CPS do sistema e CPS por servidor
+
+O CPS dos perfis é o total do sistema, somando os FS. Para definir a carga **por servidor**, use o
+`stfc-cps-por-fs`: o valor escolhido vale para cada FS, e o teste envia valor x 2 ao OpenSIPS.
+
+| Valor no menu | Enviado ao OpenSIPS | Simultâneas no sistema | `.162` / `.163` (~54/46) |
+|---|---|---|---|
+| 50 por FS | 100 CPS | ~1000 | ~54 / ~46 |
+| 100 por FS | 200 CPS | ~2000 | ~108 / ~92 |
+| 150 por FS | 300 CPS | ~3000 | ~162 / ~138 |
+
+- O caminho é o de produção, com o `load_balancer`. Ele não divide em partes iguais: um nó recebe um pouco
+  mais que o valor escolhido, e o outro um pouco menos. Confira o valor de cada nó em `Inbound CPS por FS`.
+- O teto `ZBX_MAX_CPS` vale para o total: com 300, o maior valor por FS é 150.
+- Para exatamente X em um nó, sem o `load_balancer`, use o [teste direto no FS](fs-direto.md).
+
 Pela linha de comando, as mesmas cargas (ex.: `stfc-cps-escada100`):
 
 ```bash
@@ -232,5 +249,7 @@ LABEL=meu-perfil
   primeiro é o padrão do menu) e deixe `CPS`, `CPS_START` e `RAMP_STEP` vazios: a rampa vai de CPS/2 a
   CPS, com passo CPS/10. Dimensione `WINDOW` para os 5 degraus mais o tempo no alvo. Cada valor da lista
   vira um `AllowKey` exato no agent, e cada execução ganha o rótulo `zbx-<rótulo>-<CPS>`.
+- Para o valor do menu valer por FS, acrescente `FS_COUNT=2` junto com o `CPS_CHOICES`: o teste envia
+  valor x `FS_COUNT`, e a rampa e os limites são calculados sobre esse total.
 - Depois de criar ou alterar um perfil, rode de novo o `flux-host.sh prepare zabbix-agent` e o
   `zabbix setup --scripts` (veja [Zabbix](../configuracao/zabbix.md#5-disparo-de-perfis-pelo-menu-do-zabbix)).

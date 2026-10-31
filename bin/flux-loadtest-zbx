@@ -20,6 +20,7 @@
 # Perfis: PROFILES_DIR/<nome>.conf (profiles/*.conf.example), CHAVE=valor lido como dado.
 # Perfil com CPS_CHOICES: o CPS vem do operador, um valor da lista, e define a rampa (5 degraus,
 # de CPS/2 a CPS, passo CPS/10). CPS, CPS_START e RAMP_STEP ficam vazios nesse perfil.
+# Com FS_COUNT, o valor escolhido e por FS: a carga enviada ao OpenSIPS e valor x FS_COUNT.
 # Configuracao: /etc/flux-loadtest/zabbix-runner.conf (opcional; chaves em RUNNER abaixo).
 # Codigos de saida: 0 ok, 2 uso, 3 configuracao/perfil invalido, 5 recusado (ja em execucao).
 
@@ -45,10 +46,12 @@ declare -A RUNNER=(
 )
 
 # Chaves aceitas no perfil (vazio = padrao do flux-loadtest.sh)
-readonly PROFILE_KEYS="DESC ZABBIX_ENABLED TESTS CPS CPS_CHOICES CPS_START RAMP_STEP RAMP_INTERVAL WINDOW CALLS HOLD MEDIA WEB_DURATION WEB_CONNS MYSQL_DURATION LABEL"
+readonly PROFILE_KEYS="DESC ZABBIX_ENABLED TESTS CPS CPS_CHOICES FS_COUNT CPS_START RAMP_STEP RAMP_INTERVAL WINDOW CALLS HOLD MEDIA WEB_DURATION WEB_CONNS MYSQL_DURATION LABEL"
 # Acima deste CPS o start exige os limites de atraso e de memoria do OpenSIPS no loadtest.conf
 readonly CPS_GUARD_FROM=50
 declare -A P=()
+# Valor escolhido pelo operador; com FS_COUNT, P[CPS] e o total do sistema
+CPS_CHOSEN=""
 
 # read_kv ARQUIVO NOME_DO_ARRAY CHAVES_ACEITAS: CHAVE=valor, sem executar nada
 read_kv() {
@@ -99,6 +102,8 @@ load_profile() {
     [[ -z ${P[MEDIA]} || ${P[MEDIA]} == rtp || ${P[MEDIA]} == none ]] || die "${E_CONFIG}" "${name}: MEDIA deve ser rtp ou none"
     [[ -z ${P[LABEL]} || ${P[LABEL]} =~ ^[a-z0-9-]{1,32}$ ]] || die "${E_CONFIG}" "${name}: LABEL invalido ([a-z0-9-], ate 32)"
     [[ ${P[DESC]} =~ ^[[:print:]]{0,120}$ ]] || die "${E_CONFIG}" "${name}: DESC com caracteres invalidos ou acima de 120"
+    [[ -z ${P[FS_COUNT]} || ${P[FS_COUNT]} =~ ^[1-9][0-9]?$ ]] || die "${E_CONFIG}" "${name}: FS_COUNT invalido: '${P[FS_COUNT]}'"
+    [[ -z ${P[FS_COUNT]} || -n ${P[CPS_CHOICES]} ]] || die "${E_CONFIG}" "${name}: FS_COUNT exige CPS_CHOICES"
     if [[ -n ${P[CPS_CHOICES]} ]]; then
         [[ ,${P[TESTS]}, == *,sip,* ]] || die "${E_CONFIG}" "${name}: CPS_CHOICES exige sip em TESTS"
         [[ -z ${P[CPS]}${P[CPS_START]}${P[RAMP_STEP]} ]] || die "${E_CONFIG}" "${name}: com CPS_CHOICES, CPS, CPS_START e RAMP_STEP ficam vazios"
@@ -106,7 +111,7 @@ load_profile() {
         IFS=, read -ra choices <<< "${P[CPS_CHOICES]}"
         for v in "${choices[@]}"; do
             ((v > prev)) || die "${E_CONFIG}" "${name}: CPS_CHOICES deve estar em ordem crescente: o primeiro valor e o padrao do menu"
-            ((v <= RUNNER[ZBX_MAX_CPS])) || die "${E_CONFIG}" "${name}: CPS_CHOICES ${v} acima de ZBX_MAX_CPS (${RUNNER[ZBX_MAX_CPS]})"
+            ((v * ${P[FS_COUNT]:-1} <= RUNNER[ZBX_MAX_CPS])) || die "${E_CONFIG}" "${name}: CPS_CHOICES ${v} x FS_COUNT ${P[FS_COUNT]:-1} acima de ZBX_MAX_CPS (${RUNNER[ZBX_MAX_CPS]})"
             prev=${v}
         done
     elif [[ ,${P[TESTS]}, == *,sip,* ]]; then
@@ -128,15 +133,24 @@ select_cps() {
     # o regex barra virgula no valor, que casaria com um trecho da lista
     [[ ${cps} =~ ^[1-9][0-9]{0,5}$ && ,${P[CPS_CHOICES]}, == *,"${cps}",* ]] \
         || die "${E_USAGE}" "CPS invalido para ${name}: '${cps}' (${P[CPS_CHOICES]})"
-    P[CPS]=${cps}
-    P[CPS_START]=$((cps >= 2 ? cps / 2 : 1))
-    P[RAMP_STEP]=$((cps >= 10 ? cps / 10 : 1))
+    CPS_CHOSEN=${cps}
+    local total=$((cps * ${P[FS_COUNT]:-1}))
+    P[CPS]=${total}
+    P[CPS_START]=$((total >= 2 ? total / 2 : 1))
+    P[RAMP_STEP]=$((total >= 10 ? total / 10 : 1))
 }
 
 # Rotulo do resultado; com CPS_CHOICES leva o valor, para separar as execucoes do mesmo perfil
 label_of() {
     printf 'zbx-%s' "${P[LABEL]:-$1}"
-    if [[ -n ${P[CPS_CHOICES]:-} ]]; then printf -- '-%s' "${P[CPS]}"; fi
+    if [[ -n ${P[CPS_CHOICES]:-} ]]; then printf -- '-%s' "${CPS_CHOSEN}"; fi
+}
+
+# Carga do perfil por FS. A divisao vem do load_balancer e nao e exata (~54/46 nos testes do STFC).
+fs_load_hint() {
+    [[ -n ${P[FS_COUNT]} ]] || return 0
+    printf 'carga: %s CPS por FS x %s FS = %s CPS no OpenSIPS (divisao do load_balancer, nao exata)\n' \
+        "${CPS_CHOSEN}" "${P[FS_COUNT]}" "${P[CPS]}"
 }
 
 # Limites dos FS para a carga carregada em P (docs/execucao/degraus-e-perfis.md, "Contas basicas")
@@ -278,7 +292,7 @@ cmd_start() {
     fi
     systemctl reset-failed "${UNIT}" >/dev/null 2>&1 || true
     systemd-run --quiet --unit="${UNIT}" --collect \
-        --description="flux-loadtest (Zabbix): perfil ${name}${cps:+ a ${cps} CPS}" \
+        --description="flux-loadtest (Zabbix): perfil ${name}${cps:+ a ${cps} CPS${P[FS_COUNT]:+ por FS}}" \
         --setenv=FLT_ZBX_RUNNER_CONF="${RUNNER_CONF}" \
         --property=TimeoutStopSec=900 \
         --property=ExecStopPost="${SELF_BIN} finish ${name}${cps:+ ${cps}}" \
@@ -287,6 +301,7 @@ cmd_start() {
     json_state start "${name}" "${UNIT}" "${P[CPS]}"
     printf 'iniciado: perfil %s (unidade %s, rotulo %s). Acompanhe no host <prefixo>run; parar: stop\n' \
         "${name}" "${UNIT}" "$(label_of "${name}")"
+    fs_load_hint
     fs_limits_hint
 }
 
@@ -310,7 +325,10 @@ cmd_finish() {
     [[ ${EXIT_CODE:-exited} == exited && ${rc} =~ ^[0-9]+$ ]] || rc=-1
     P=([LABEL]="")
     load_profile "${name}" >/dev/null 2>&1 || true
-    [[ -z ${cps} ]] || P[CPS]=${cps}
+    if [[ -n ${cps} ]]; then
+        CPS_CHOSEN=${cps}
+        P[CPS]=$((cps * ${P[FS_COUNT]:-1}))
+    fi
     results=$(flt_conf_value RESULTS_DIR 2>/dev/null || true)
     results=${results:-/var/lib/flux-loadtest/results}
     run_dir=$(find "${results}" -maxdepth 1 -type d -name "*-$(label_of "${name}")" -printf '%T@ %p\n' 2>/dev/null \
@@ -328,6 +346,7 @@ cmd_plan() {
     printf 'flux-loadtest.sh'
     printf ' %q' "${RUN_ARGS[@]}" --confirm-prod -y
     printf '\n'
+    fs_load_hint
     fs_limits_hint
     printf '\n'
     timeout 25 "${RUNNER[FLT_BIN]}" "${RUN_ARGS[@]}" --dry-run 2>&1 | head -n 60 || true
@@ -358,7 +377,7 @@ cmd_agent_conf() {
 }
 
 usage() {
-    sed -n '3,24p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,25p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 main() {
