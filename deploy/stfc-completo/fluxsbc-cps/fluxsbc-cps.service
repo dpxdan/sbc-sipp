@@ -4,7 +4,7 @@ After=freeswitch.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/php /opt/fluxsbc/worker_cps.php
+ExecStart=/usr/bin/php /opt/flux/misc/worker_cps.php
 Restart=always
 RestartSec=3
 User=root
