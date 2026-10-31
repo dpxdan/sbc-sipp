@@ -156,6 +156,9 @@ GUARD_MAX_FAIL_PCT=5
 # INVITE -> 200 medio do periodo (ms; minimo de 10 chamadas). Em producao o atraso atinge tambem
 # as chamadas reais, mesmo sem falha SIP. 0 = desligado.
 GUARD_MAX_PDD_MS=0
+# Memoria compartilhada do OpenSIPS em uso (%). O esgotamento derruba tambem as chamadas reais.
+# 0 = desligado. O disparo pelo Zabbix exige este limite e o GUARD_MAX_PDD_MS acima de 50 CPS.
+GUARD_MAX_OS_SHM_PCT=0
 # Replicacao assincrona (nao se aplica ao Percona XtraDB Cluster)
 GUARD_MAX_REPL_LAG=30
 # Percona XtraDB Cluster: no fora de Synced ou sem quorum (Primary) sempre interrompem.

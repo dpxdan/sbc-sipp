@@ -206,7 +206,7 @@ respostas 200 para ~4324 esperadas (~2924 retransmissões). O .162 recebeu 20.10
   - com 1962 diálogos estáveis e 117 transações: 21,7% (de 5,8% em repouso), ~0,008% por diálogo;
   - com 297 diálogos, 275 em estabelecimento e 1018 transações (50 CPS com retransmissões): 38,5%.
 - **Conclusão:** o consumo vem das transações em andamento (CPS x atraso), não dos diálogos. A projeção anterior (~0,04% por diálogo, estouro em ~2000) superestimava. 3000 simultâneas a CPS baixa ficariam em ~30%.
-- **Risco que continua:** sob CPS alta com retransmissões, a memória sobe rápido. O guard do flux-loadtest não vigia esse indicador.
+- **Risco que continua:** sob CPS alta com retransmissões, a memória sobe rápido. O guard do flux-loadtest não vigiava esse indicador na campanha; depois dela, passou a vigiar com `GUARD_MAX_OS_SHM_PCT`.
 - **Recomendação:** aumentar o `-m` do OpenSIPS (ex.: 256 MB) antes de testar CPS acima de 50. Exige restart em janela própria.
 
 ### A4. CPU do sbc-stfc-1 (OpenSIPS e FS no mesmo servidor)

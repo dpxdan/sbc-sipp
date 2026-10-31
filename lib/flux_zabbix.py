@@ -639,8 +639,9 @@ def import_template(api, path):
 
 
 def enabled_profiles(directory):
-    """Perfis com ZABBIX_ENABLED=1 (mesma regra do bin/flux-loadtest-zbx list), ordenados."""
-    names = []
+    """Perfis com ZABBIX_ENABLED=1 (mesma regra do bin/flux-loadtest-zbx list), ordenados:
+    lista de (nome, CPS_CHOICES); CPS_CHOICES vazio = perfil de CPS fixo."""
+    profiles = []
     try:
         files = sorted(os.listdir(directory))
     except OSError as e:
@@ -651,12 +652,13 @@ def enabled_profiles(directory):
             continue
         try:
             with open(os.path.join(directory, fn), encoding="utf-8") as f:
-                on = any(l.strip().strip("\r") in ("ZABBIX_ENABLED=1", 'ZABBIX_ENABLED="1"') for l in f)
+                lines = [l.strip().strip("\r") for l in f]
         except OSError:
             continue
-        if on:
-            names.append(name)
-    return names
+        if any(l in ("ZABBIX_ENABLED=1", 'ZABBIX_ENABLED="1"') for l in lines):
+            choices = [l.split("=", 1)[1].strip("\"'") for l in lines if l.startswith("CPS_CHOICES=")]
+            profiles.append((name, choices[-1] if choices else ""))
+    return profiles
 
 
 def ensure_agent_interface(api, hostid, addr):
@@ -687,8 +689,9 @@ def setup_scripts(api, gid, a):
     # execute_on agent: o Zabbix 7.2 fixa o timeout do script em 30s (o plan usa timeout 25)
     base = {"type": 0, "execute_on": 0, "scope": 2, "menu_path": SCRIPT_MENU, "groupid": gid,
             "usrgrpid": usrgrp, "host_access": 3}
+    fixed = [name for name, choices in profiles if not choices]
     pick = {"manualinput": 1, "manualinput_validator_type": 1,
-            "manualinput_validator": ",".join(profiles)}  # lista: o primeiro e o padrao
+            "manualinput_validator": ",".join(fixed)}  # lista: o primeiro e o padrao
     specs = [
         dict(base, name="Iniciar perfil", command=f"{ZBX_WRAPPER} start {{MANUALINPUT}}",
              manualinput_prompt="Perfil do flux-loadtest a iniciar", **pick,
@@ -705,7 +708,22 @@ def setup_scripts(api, gid, a):
     ]
     if not profiles:
         log(f"AVISO: nenhum perfil com ZABBIX_ENABLED=1 em {a.profiles_dir}: scripts de perfil nao criados")
+    if not fixed:
         specs = [s for s in specs if "manualinput" not in s]
+    # Perfil com CPS_CHOICES: um manualinput por script, entao o par e por perfil e a lista e de CPS
+    for name, choices in profiles:
+        if not choices:
+            continue
+        cps = {"manualinput": 1, "manualinput_validator_type": 1, "manualinput_validator": choices}
+        specs += [
+            dict(base, name=f"Iniciar {name} (CPS)", command=f"{ZBX_WRAPPER} start {name} {{MANUALINPUT}}",
+                 manualinput_prompt="CPS alvo do teste", **cps,
+                 confirmation=f"Iniciar o perfil {name} a {{MANUALINPUT}} CPS em PRODUCAO? A carga atinge os servidores reais.",
+                 description="Inicia o perfil com o CPS escolhido numa unidade systemd no servidor de testes e retorna na hora."),
+            dict(base, name=f"Plano {name} (CPS)", command=f"{ZBX_WRAPPER} plan {name} {{MANUALINPUT}}",
+                 manualinput_prompt="CPS para ver o plano", **cps,
+                 description="Mostra o plano do run (--dry-run) e os limites dos FS para o CPS escolhido, sem executar nada."),
+        ]
     current = {(s["name"], s["menu_path"]): s["scriptid"] for s in
                api.call("script.get", {"output": ["scriptid", "name", "menu_path"],
                                        "filter": {"menu_path": [SCRIPT_MENU]}})}
@@ -718,7 +736,7 @@ def setup_scripts(api, gid, a):
             api.call("script.create", spec)
             log(f"script criado: {SCRIPT_MENU}/{spec['name']}")
     if profiles:
-        log(f"perfis no menu: {', '.join(profiles)} (o agent so aceita os do include gerado por flux-loadtest-zbx agent-conf)")
+        log(f"perfis no menu: {', '.join(name for name, _ in profiles)} (o agent so aceita os do include gerado por flux-loadtest-zbx agent-conf)")
 
 
 # Dashboard global de resultados. Tipos de campo de widget da API do Zabbix 7.x.
