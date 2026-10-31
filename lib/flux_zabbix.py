@@ -645,7 +645,8 @@ def import_template(api, path):
 
 def enabled_profiles(directory):
     """Perfis com ZABBIX_ENABLED=1 (mesma regra do bin/flux-loadtest-zbx list), ordenados:
-    lista de (nome, CPS_CHOICES); CPS_CHOICES vazio = perfil de CPS fixo."""
+    lista de (nome, CPS_CHOICES, FS_COUNT); CPS_CHOICES vazio = perfil de CPS fixo; FS_COUNT
+    preenchido = o CPS escolhido vale por FS."""
     profiles = []
     try:
         files = sorted(os.listdir(directory))
@@ -662,7 +663,8 @@ def enabled_profiles(directory):
             continue
         if any(l in ("ZABBIX_ENABLED=1", 'ZABBIX_ENABLED="1"') for l in lines):
             choices = [l.split("=", 1)[1].strip("\"'") for l in lines if l.startswith("CPS_CHOICES=")]
-            profiles.append((name, choices[-1] if choices else ""))
+            fs_count = [l.split("=", 1)[1].strip("\"'") for l in lines if l.startswith("FS_COUNT=")]
+            profiles.append((name, choices[-1] if choices else "", fs_count[-1] if fs_count else ""))
     return profiles
 
 
@@ -694,7 +696,7 @@ def setup_scripts(api, gid, a):
     # execute_on agent: o Zabbix 7.2 fixa o timeout do script em 30s (o plan usa timeout 25)
     base = {"type": 0, "execute_on": 0, "scope": 2, "menu_path": SCRIPT_MENU, "groupid": gid,
             "usrgrpid": usrgrp, "host_access": 3}
-    fixed = [name for name, choices in profiles if not choices]
+    fixed = [name for name, choices, _ in profiles if not choices]
     pick = {"manualinput": 1, "manualinput_validator_type": 1,
             "manualinput_validator": ",".join(fixed)}  # lista: o primeiro e o padrao
     specs = [
@@ -716,17 +718,18 @@ def setup_scripts(api, gid, a):
     if not fixed:
         specs = [s for s in specs if "manualinput" not in s]
     # Perfil com CPS_CHOICES: um manualinput por script, entao o par e por perfil e a lista e de CPS
-    for name, choices in profiles:
+    for name, choices, fs_count in profiles:
         if not choices:
             continue
+        unit = f"CPS por FS (total = valor x {fs_count} FS)" if fs_count else "CPS"
         cps = {"manualinput": 1, "manualinput_validator_type": 1, "manualinput_validator": choices}
         specs += [
             dict(base, name=f"Iniciar {name} (CPS)", command=f"{ZBX_WRAPPER} start {name} {{MANUALINPUT}}",
-                 manualinput_prompt="CPS alvo do teste", **cps,
-                 confirmation=f"Iniciar o perfil {name} a {{MANUALINPUT}} CPS em PRODUCAO? A carga atinge os servidores reais.",
+                 manualinput_prompt=f"{unit}: alvo do teste", **cps,
+                 confirmation=f"Iniciar o perfil {name} a {{MANUALINPUT}} {unit} em PRODUCAO? A carga atinge os servidores reais.",
                  description="Inicia o perfil com o CPS escolhido numa unidade systemd no servidor de testes e retorna na hora."),
             dict(base, name=f"Plano {name} (CPS)", command=f"{ZBX_WRAPPER} plan {name} {{MANUALINPUT}}",
-                 manualinput_prompt="CPS para ver o plano", **cps,
+                 manualinput_prompt=f"{unit}: valor para ver o plano", **cps,
                  description="Mostra o plano do run (--dry-run) e os limites dos FS para o CPS escolhido, sem executar nada."),
         ]
     current = {(s["name"], s["menu_path"]): s["scriptid"] for s in
@@ -741,7 +744,7 @@ def setup_scripts(api, gid, a):
             api.call("script.create", spec)
             log(f"script criado: {SCRIPT_MENU}/{spec['name']}")
     if profiles:
-        log(f"perfis no menu: {', '.join(name for name, _ in profiles)} (o agent so aceita os do include gerado por flux-loadtest-zbx agent-conf)")
+        log(f"perfis no menu: {', '.join(p[0] for p in profiles)} (o agent so aceita os do include gerado por flux-loadtest-zbx agent-conf)")
 
 
 # Dashboard global de resultados. Tipos de campo de widget da API do Zabbix 7.x.

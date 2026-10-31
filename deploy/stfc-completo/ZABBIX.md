@@ -205,6 +205,7 @@ Perfis do STFC (deste diretório):
 | `stfc-cps-escada200` | Escada de 100 a 200 CPS (+20 a cada 60 s, hold de 10 s); exige `fs-limites 250 2800`, os mesmos guards e `-m` do OpenSIPS maior |
 | `stfc-cps-escada300` | Escada de 150 a 300 CPS (+30 a cada 60 s, hold de 10 s); exige `fs-limites 350 4200`, os mesmos guards e `-m` do OpenSIPS maior |
 | `stfc-cps-livre` | CPS escolhido no menu, de 10 a 300 (scripts `Iniciar stfc-cps-livre (CPS)` e `Plano stfc-cps-livre (CPS)`); o Plano mostra os limites do valor |
+| `stfc-cps-por-fs` | CPS **por FS** escolhido no menu, de 10 a 150 (scripts `Iniciar stfc-cps-por-fs (CPS)` e `Plano stfc-cps-por-fs (CPS)`); envia valor x 2 ao OpenSIPS, e o Plano mostra o total e os limites |
 | `stfc-c1000` | 1000 simultâneas a 10 CPS |
 | `stfc-c1000-rtp` | Igual ao `stfc-c1000`, com RTP G.711 nos dois sentidos (A/B de mídia); exige DIDs com `bypass_media = 0` |
 | `stfc-c2000` | 2000 simultâneas a 10 CPS (hold de 200 s); exige limites maiores nos FS |

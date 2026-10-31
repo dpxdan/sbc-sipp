@@ -156,6 +156,9 @@ scripts próprios, porque o Zabbix aceita uma única entrada por script:
 | `Plano stfc-cps-livre (CPS)` | Lista de CPS | Plano do `run` e o `fs-limites.sh aplicar` daquele valor, sem executar nada |
 | `Iniciar stfc-cps-livre (CPS)` | Lista de CPS | Pede confirmação com o valor e inicia o teste |
 
+Com `FS_COUNT` no perfil (no STFC, `stfc-cps-por-fs`), o valor do menu vale por FS, e o Plano mostra o total
+enviado ao OpenSIPS. Veja [CPS por servidor](../execucao/degraus-e-perfis.md#cps-do-sistema-e-cps-por-servidor).
+
 O valor define a rampa (de CPS/2 a CPS, passo CPS/10) e o rótulo do resultado
 (`zbx-stfc-cps-livre-100`). O script **Estado** mostra o CPS da execução em andamento e o da última de
 cada perfil. Acima de 50 CPS, o wrapper exige `GUARD_MAX_PDD_MS` e `GUARD_MAX_OS_SHM_PCT` no
