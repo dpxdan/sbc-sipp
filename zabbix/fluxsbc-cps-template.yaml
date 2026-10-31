@@ -1,0 +1,108 @@
+zabbix_export:
+  version: '7.2'
+  template_groups:
+    - uuid: 75609c0f822f4a9e876b6b6b741bcdb8
+      name: 'Templates/FluxSBC'
+  templates:
+    - uuid: 5a02bde704854ddd8fdbb961dd383a35
+      template: 'FluxSBC - CPS FreeSWITCH'
+      name: 'FluxSBC - CPS FreeSWITCH'
+      description: 'Chamadas e sessoes por segundo do FreeSWITCH, por agent passivo. Exige o worker e os UserParameter de deploy/stfc-completo/fluxsbc-cps. Sem gatilhos: as acoes de notificacao de producao nao tem condicao.'
+      groups:
+        - name: 'Templates/FluxSBC'
+      items:
+        - uuid: 8d9e2dab7a5e488f966676c8864dcf50
+          name: 'FluxSBC - Inbound CPS'
+          key: 'fluxsbc.calls.inbound'
+          delay: 5s
+          history: 30d
+          value_type: FLOAT
+          units: 'cps'
+          description: 'Chamadas novas por segundo: pernas de entrada criadas no FreeSWITCH. E o CPS comparavel ao alvo do SIPp.'
+          preprocessing:
+            - type: CHANGE_PER_SECOND
+              parameters:
+                - ''
+          tags:
+            - tag: 'component'
+              value: 'cps'
+        - uuid: 0151d1fdd12a428494c9bb17c8bbce60
+          name: 'FluxSBC - Outbound CPS'
+          key: 'fluxsbc.calls.outbound'
+          delay: 5s
+          history: 30d
+          value_type: FLOAT
+          units: 'cps'
+          description: 'Pernas de saida criadas por segundo. Abaixo do Inbound CPS: chamadas recusadas antes do bridge. Acima: failover com mais de uma tentativa.'
+          preprocessing:
+            - type: CHANGE_PER_SECOND
+              parameters:
+                - ''
+          tags:
+            - tag: 'component'
+              value: 'cps'
+        - uuid: 1fe2d2e2da6d4ce8b353c6d6296c3c35
+          name: 'FluxSBC - SPS'
+          type: CALCULATED
+          key: 'fluxsbc.sps'
+          delay: 5s
+          history: 30d
+          value_type: FLOAT
+          units: 'sps'
+          params: 'last(//fluxsbc.calls.inbound)+last(//fluxsbc.calls.outbound)'
+          description: 'Sessoes novas por segundo (entrada + saida). Comparar com sessions-per-second do FreeSWITCH.'
+          tags:
+            - tag: 'component'
+              value: 'cps'
+      dashboards:
+        - uuid: f05262175f2b40d59e96dcc804e63031
+          name: 'CPS do FreeSWITCH'
+          pages:
+            - widgets:
+                - type: graph
+                  name: 'CPS: entrada x saida'
+                  width: '36'
+                  height: '6'
+                  fields:
+                    - type: GRAPH
+                      name: graphid.0
+                      value:
+                        host: 'FluxSBC - CPS FreeSWITCH'
+                        name: 'CPS: entrada x saida'
+                    - type: STRING
+                      name: reference
+                      value: FLXCA
+                - type: graph
+                  name: 'SPS: sessoes novas por segundo'
+                  x: '36'
+                  width: '36'
+                  height: '6'
+                  fields:
+                    - type: GRAPH
+                      name: graphid.0
+                      value:
+                        host: 'FluxSBC - CPS FreeSWITCH'
+                        name: 'SPS: sessoes novas por segundo'
+                    - type: STRING
+                      name: reference
+                      value: FLXCB
+  graphs:
+    - uuid: b0297b0016ba423ea4ab6b88c0620f74
+      name: 'CPS: entrada x saida'
+      graph_items:
+        - color: 2774A4
+          item:
+            host: 'FluxSBC - CPS FreeSWITCH'
+            key: 'fluxsbc.calls.inbound'
+        - sortorder: '1'
+          color: F63100
+          item:
+            host: 'FluxSBC - CPS FreeSWITCH'
+            key: 'fluxsbc.calls.outbound'
+    - uuid: eafca6e532ad4ee5b980e295313b60a1
+      name: 'SPS: sessoes novas por segundo'
+      graph_items:
+        - color: 2774A4
+          item:
+            host: 'FluxSBC - CPS FreeSWITCH'
+            key: 'fluxsbc.sps'

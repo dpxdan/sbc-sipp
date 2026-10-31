@@ -140,5 +140,6 @@ Os limites do guard são explicados em [Segurança](../referencia/seguranca.md#l
 | `ZABBIX_GEN_AGENT` | vazio | IP pelo qual o Zabbix alcança o agent da VM de teste (disparo de perfis) |
 | `ZABBIX_SCRIPT_USRGRP` | vazio | Grupo de usuários que pode executar os scripts do menu |
 | `ZABBIX_PROFILES_DIR` | `/etc/flux-loadtest/profiles.d` | Perfis publicados no menu |
+| `ZABBIX_CPS_HOSTS` | | FS no Zabbix para o template de CPS, separados por vírgula ([CPS do FreeSWITCH](zabbix.md#6-cps-do-freeswitch)) |
 
 Uso das chaves em [Zabbix](zabbix.md).

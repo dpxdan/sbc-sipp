@@ -53,6 +53,11 @@ TRIGGER_TEMPLATE = "Flux Loadtest - Disparo"
 HOST_GROUP = "Flux Loadtest"
 ZBX_WRAPPER = "sudo -n /usr/local/sbin/flux-loadtest-zbx"
 SCRIPT_MENU = "Flux Loadtest"
+CPS_TEMPLATE = "FluxSBC - CPS FreeSWITCH"
+CPS_DASHBOARD = "FluxSBC - CPS FreeSWITCH"
+CPS_KEYS = ("fluxsbc.calls.inbound", "fluxsbc.calls.outbound", "fluxsbc.sps")
+ZBX_VALUE_FLOAT = "0"
+GRAPH_COLORS = ("2774A4", "F63100", "1A7C11", "A54F10")
 PROFILE_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
 TEMPLATE_GROUP = "Templates/Flux Loadtest"
 
@@ -758,9 +763,11 @@ def wfield(ftype, name, value):
 def svggraph(name, x, y, datasets, w=DASH_COLS // 2, h=5):
     """Grafico por padrao de host e de nome de item: vale para qualquer prefixo e host novo."""
     fields = [wfield(WF_INT, "legend_lines", 2)]
-    for i, (hosts, items, color, axis) in enumerate(datasets):
+    for i, (hosts, items, color, axis, *stacked) in enumerate(datasets):
         fields += [wfield(WF_INT, f"ds.{i}.dataset_type", 1), wfield(WF_STR, f"ds.{i}.color", color),
                    wfield(WF_INT, f"ds.{i}.axisy", axis)]
+        if stacked and stacked[0]:
+            fields.append(wfield(WF_INT, f"ds.{i}.stacked", 1))
         fields += [wfield(WF_STR, f"ds.{i}.hosts.{j}", hst) for j, hst in enumerate(hosts)]
         fields += [wfield(WF_STR, f"ds.{i}.items.{j}", it) for j, it in enumerate(items)]
     if any(d[3] for d in datasets):
@@ -781,8 +788,9 @@ def problems_widget(name, x, y, h, gid, lines):
                        wfield(WF_STR, "tag_priority", "componente,tipo"), wfield(WF_INT, "show_opdata", 1)]}
 
 
-def dashboard_pages(p, gid, result_items):
-    """Paginas do dashboard. p = prefixo dos hosts; result_items = {chave: itemid} do host run."""
+def dashboard_pages(p, gid, result_items, cps_hosts=()):
+    """Paginas do dashboard. p = prefixo dos hosts; result_items = {chave: itemid} do host run;
+    cps_hosts = nomes visiveis dos FS com o template de CPS."""
     run, half = p + "run*", DASH_COLS // 2
     cols = []
     for i, (label, key) in enumerate((c for c in RESULT_COLUMNS if c[1] in result_items)):
@@ -845,13 +853,33 @@ def dashboard_pages(p, gid, result_items):
                  [([p + "db*"], ["MySQL: consultas"], "A54F10", 0), ([p + "db*"], ["MySQL: CPU*"], "6C59DC", 1)]),
         svggraph("Pacotes recebidos por servidor", half, 10, [([p + "*"], ["Pacotes recebidos"], "AC8C14", 0)]),
     ]
+    if cps_hosts:
+        servidores.append(svggraph("FreeSWITCH: chamadas por segundo", 0, 15, cps_datasets(cps_hosts, "FluxSBC - Inbound CPS")))
     return [{"name": "Resultados", "widgets": resultado}, {"name": "Gargalos", "widgets": gargalos},
             {"name": "Servidores", "widgets": servidores}]
 
 
-def setup_dashboard(api, prefix, gid):
+def cps_datasets(hosts, item, stacked=False):
+    """Uma serie por FS: cada no com a propria cor no grafico."""
+    return [([h], [item], GRAPH_COLORS[i % len(GRAPH_COLORS)], 0, stacked) for i, h in enumerate(hosts)]
+
+
+def cps_find_hosts(api, names):
+    """Hosts por nome tecnico ou visivel: {nome pedido: host}."""
+    found = api.call("host.get", {"output": ["hostid", "host", "name"], "searchByAny": True,
+                                  "filter": {"host": names, "name": names}})
+    return {n: h for n in names for h in found if n in (h["host"], h["name"])}
+
+
+def setup_dashboard(api, prefix, gid, cps_names=()):
     """Dashboard global "Flux Loadtest - Resultados (<prefixo>)": criado ou atualizado (idempotente).
     Graficos por padrao de host e item; a tabela de resultados usa os itens do host <prefixo>run."""
+    cps_hosts = []
+    if cps_names:
+        by_name = cps_find_hosts(api, list(cps_names))
+        cps_hosts = [by_name[n]["name"] for n in cps_names if n in by_name]
+        if len(cps_hosts) != len(cps_names):
+            log("AVISO: ZABBIX_CPS_HOSTS com host inexistente no Zabbix: o grafico de CPS fica sem esse no")
     name = f"Flux Loadtest - Resultados ({prefix})"
     run = api.call("host.get", {"filter": {"host": [prefix + "run"]}, "output": ["hostid"]})
     result_items = {}
@@ -863,7 +891,7 @@ def setup_dashboard(api, prefix, gid):
     if missing:
         log("AVISO: itens ausentes no host " + prefix + "run (" + ", ".join(missing)
             + "): reimporte o template (--import-template); a tabela fica sem essas colunas")
-    spec = {"name": name, "display_period": 60, "auto_start": 0, "pages": dashboard_pages(prefix, gid, result_items)}
+    spec = {"name": name, "display_period": 60, "auto_start": 0, "pages": dashboard_pages(prefix, gid, result_items, cps_hosts)}
     found = api.call("dashboard.get", {"filter": {"name": [name]}, "output": ["dashboardid"]})
     if found:
         api.call("dashboard.update", dict(spec, dashboardid=found[0]["dashboardid"]))
@@ -931,11 +959,81 @@ def cmd_setup(a):
             die(E_USAGE, "--scripts exige --gen-agent IP (os scripts rodam no agent do host gen)")
         setup_scripts(api, gid, a)
     try:
-        setup_dashboard(api, a.prefix, gid)
+        setup_dashboard(api, a.prefix, gid, a.cps_host)
     except RuntimeError as e:
         # hosts e templates ja estao prontos; o dashboard depende de permissao do usuario do token
         log(f"AVISO: dashboard nao criado: {e}")
         return E_REMOTE
+    return E_OK
+
+
+def cps_check_items(api, hosts):
+    """Mostra a situacao das chaves de CPS em cada host; para se o template nao puder ser vinculado."""
+    tpl = api.call("template.get", {"filter": {"host": [CPS_TEMPLATE]}, "output": ["templateid"]})
+    own = set()
+    if tpl:
+        own = {i["itemid"] for i in api.call("item.get", {"templateids": tpl[0]["templateid"], "output": ["itemid"]})}
+    items = api.call("item.get", {"hostids": [h["hostid"] for h in hosts], "filter": {"key_": list(CPS_KEYS)},
+                                  "output": ["hostid", "key_", "templateid", "value_type"]})
+    problems = []
+    for h in hosts:
+        found = {i["key_"]: i for i in items if i["hostid"] == h["hostid"]}
+        for key in CPS_KEYS:
+            i = found.get(key)
+            if not i:
+                log(f"{h['name']}: {key}: sem item, sera criado")
+            elif i["value_type"] != ZBX_VALUE_FLOAT:
+                problems.append(f"{h['name']}: {key} nao e numerico (float)")
+            elif i["templateid"] == "0":
+                log(f"{h['name']}: {key}: criado no host, passa a herdar do template")
+            elif i["templateid"] in own:
+                log(f"{h['name']}: {key}: ja herdado do template")
+            else:
+                problems.append(f"{h['name']}: {key} vem de outro template: desvincule-o antes")
+    if problems:
+        die(E_CONFIG, "template nao vinculado: " + "; ".join(problems))
+
+
+def cps_dashboard_spec(hosts):
+    """Dashboard global: o de template mostra um host por vez, e este junta os FS."""
+    half, inb, outb = DASH_COLS // 2, "FluxSBC - Inbound CPS", "FluxSBC - Outbound CPS"
+    widgets = [
+        svggraph("Inbound CPS por FS", 0, 0, cps_datasets(hosts, inb)),
+        svggraph("Inbound CPS total (empilhado)", half, 0, cps_datasets(hosts, inb, stacked=True)),
+        svggraph("Entrada x saida por segundo", 0, 5, [(hosts, [inb], GRAPH_COLORS[0], 0), (hosts, [outb], GRAPH_COLORS[1], 0)]),
+        svggraph("SPS por FS", half, 5, cps_datasets(hosts, "FluxSBC - SPS")),
+    ]
+    return {"name": CPS_DASHBOARD, "display_period": 60, "auto_start": 0, "pages": [{"name": "CPS", "widgets": widgets}]}
+
+
+def cmd_cps_setup(a):
+    """Template e dashboard de CPS nos FS reais. Com --dry-run, so le e mostra."""
+    api = Api(a.api_url, read_token(a.token_file), a.insecure)
+    log(f"API {a.api_url}: Zabbix {api.call('apiinfo.version', auth=False)}")
+    by_name = cps_find_hosts(api, a.cps_host)
+    missing = [n for n in a.cps_host if n not in by_name]
+    if missing:
+        die(E_CONFIG, "host inexistente no Zabbix: " + ", ".join(missing))
+    hosts = [by_name[n] for n in a.cps_host]
+    cps_check_items(api, hosts)
+    if a.dry_run:
+        log("dry-run: nada foi alterado")
+        return E_OK
+    import_template(api, a.template)
+    tpl = api.call("template.get", {"filter": {"host": [CPS_TEMPLATE]}, "output": ["templateid"]})
+    if not tpl:
+        die(E_REMOTE, f"template {CPS_TEMPLATE} ausente depois da importacao")
+    api.call("host.massadd", {"hosts": [{"hostid": h["hostid"]} for h in hosts],
+                              "templates": [{"templateid": tpl[0]["templateid"]}]})
+    log(f"template vinculado: {', '.join(h['name'] for h in hosts)}")
+    spec = cps_dashboard_spec([h["name"] for h in hosts])
+    found = api.call("dashboard.get", {"filter": {"name": [CPS_DASHBOARD]}, "output": ["dashboardid"]})
+    if found:
+        api.call("dashboard.update", dict(spec, dashboardid=found[0]["dashboardid"]))
+        log(f"dashboard atualizado: {CPS_DASHBOARD}")
+    else:
+        api.call("dashboard.create", spec)
+        log(f"dashboard criado: {CPS_DASHBOARD}")
     return E_OK
 
 
@@ -1051,6 +1149,14 @@ def main():
     p.add_argument("--scripts", action="store_true", help="cria/atualiza os scripts do menu Flux Loadtest")
     p.add_argument("--script-usrgrp", default="", help="grupo de usuarios que pode executar os scripts")
     p.add_argument("--profiles-dir", default="/etc/flux-loadtest/profiles.d")
+    p.add_argument("--cps-host", action="append", default=[], help="FS com o template de CPS (repetivel): "
+                   "grafico de CPS na pagina Servidores")
+
+    p = sub.add_parser("cps-setup", help="importa o template de CPS, vincula aos FS e cria o dashboard")
+    common_api(p)
+    p.add_argument("--template", required=True, help="YAML do template de CPS")
+    p.add_argument("--cps-host", action="append", required=True, help="nome do host no Zabbix (repetivel)")
+    p.add_argument("--dry-run", action="store_true", help="so verifica os hosts e os itens")
 
     p = sub.add_parser("check", help="testa a API e o trapper")
     common_api(p)
@@ -1066,13 +1172,14 @@ def main():
     a = ap.parse_args()
     if a.cmd == "send" and not a.server and not a.dry_run:
         die(E_CONFIG, "ZABBIX_SERVER nao definido")
-    if a.cmd in ("setup", "bootstrap") and not a.api_url:
+    if a.cmd in ("setup", "cps-setup", "bootstrap") and not a.api_url:
         die(E_CONFIG, "ZABBIX_API_URL nao definido")
     if a.cmd == "setup" and a.gen_agent and not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", a.gen_agent):
         die(E_USAGE, f"--gen-agent invalido: {a.gen_agent} (IPv4)")
     if a.cmd == "bootstrap" and not a.token_file:
         die(E_CONFIG, "--token-file obrigatorio")
-    handler = {"send": cmd_send, "setup": cmd_setup, "check": cmd_check, "bootstrap": cmd_bootstrap}[a.cmd]
+    handler = {"send": cmd_send, "setup": cmd_setup, "cps-setup": cmd_cps_setup, "check": cmd_check,
+               "bootstrap": cmd_bootstrap}[a.cmd]
     try:
         sys.exit(handler(a))
     except RuntimeError as e:

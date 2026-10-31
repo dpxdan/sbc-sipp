@@ -429,4 +429,5 @@ flux-loadtest acrescentou.
 | Envio ao vivo | Esvaziar `ZABBIX_SERVER` no `loadtest.conf` |
 | Hosts, templates, scripts e dashboard | No Zabbix: excluir o grupo de hosts `Flux Loadtest` e seus hosts, os templates do grupo `Templates/Flux Loadtest`, os scripts do menu `Flux Loadtest` e o dashboard |
 | Manutenção | Excluir `Flux Loadtest - sem alertas ao suporte` |
+| Template de CPS | No Zabbix: desvincular `FluxSBC - CPS FreeSWITCH` dos FS (use *Unlink* para manter os itens no host e *Unlink and clear* para apagá-los), excluir o template e o dashboard `FluxSBC - CPS FreeSWITCH`. Nos FS: `systemctl disable --now fluxsbc-cps`, remover a unidade, `/opt/fluxsbc/`, `/etc/fluxsbc/` e a linha de `fluxsbc.calls.outbound`, e reiniciar o `zabbix-agent` |
 | Token | Revogar em *Users > API tokens* e apagar `/etc/flux-loadtest/zabbix_api.token` |

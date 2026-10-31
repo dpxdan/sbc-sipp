@@ -187,3 +187,88 @@ Segurança do disparo:
   (código 6).
 
 Como ler o dashboard: [Dashboard do Zabbix](../resultados/zabbix-dashboard.md).
+
+## 6. CPS do FreeSWITCH
+
+Template `FluxSBC - CPS FreeSWITCH` (`zabbix/fluxsbc-cps-template.yaml`), para os FS reais. Diferente dos
+templates `Flux Loadtest`, ele coleta por agent passivo, com ou sem teste em andamento.
+
+| Item | Chave | Leitura |
+|---|---|---|
+| `FluxSBC - Inbound CPS` | `fluxsbc.calls.inbound` | Chamadas novas por segundo; a soma dos nós é comparável ao alvo do SIPp |
+| `FluxSBC - Outbound CPS` | `fluxsbc.calls.outbound` | Pernas de saída por segundo. Abaixo do Inbound: chamadas recusadas antes do bridge. Acima: failover |
+| `FluxSBC - SPS` | `fluxsbc.sps` | Entrada + saída, por nó. Compare com `sessions-per-second` do FS |
+
+| Dashboard | Onde | Conteúdo |
+|---|---|---|
+| `FluxSBC - CPS FreeSWITCH` | *Dashboards* (global) | Os dois FS juntos: Inbound por nó, total empilhado, entrada x saída, SPS |
+| `CPS do FreeSWITCH` | *Monitoring > Hosts*, link *Dashboards* do host | Um FS por vez (limite do dashboard de template) |
+
+!!! warning "Sem gatilhos"
+    O template não traz gatilhos. As ações de notificação de produção não têm condição, e estes hosts
+    ficam fora da manutenção dos `flt-*`: um gatilho aqui chegaria ao suporte.
+
+### Instalação
+
+Em cada FS, como root. A troca do worker reinicia só o worker, e o restart do `zabbix-agent` deixa o host
+alguns segundos sem coleta; nenhum dos dois afeta chamadas.
+
+Senha do event socket (o `read` não mostra a senha na tela):
+
+```bash
+install -d -m 0700 /etc/fluxsbc && install -m 0600 /dev/null /etc/fluxsbc/event_socket.pass && read -rs -p 'Senha do event socket: ' S && printf '%s\n' "$S" > /etc/fluxsbc/event_socket.pass && unset S && echo
+```
+
+Worker:
+
+```bash
+install -d -m 0755 /opt/fluxsbc && install -m 0644 /opt/flux-loadtest/deploy/stfc-completo/fluxsbc-cps/worker_cps.php /opt/fluxsbc/worker_cps.php && php -l /opt/fluxsbc/worker_cps.php
+```
+
+```bash
+install -m 0644 /opt/flux-loadtest/deploy/stfc-completo/fluxsbc-cps/fluxsbc-cps.service /etc/systemd/system/fluxsbc-cps.service && systemctl daemon-reload && systemctl enable fluxsbc-cps && systemctl restart fluxsbc-cps && systemctl status fluxsbc-cps --no-pager
+```
+
+UserParameter. O agent não sobe com a mesma chave definida duas vezes, então confira antes e não repita
+`fluxsbc.calls.inbound`:
+
+```bash
+grep -rn 'fluxsbc.calls' /etc/zabbix/
+```
+
+Inclua a linha de `deploy/stfc-completo/fluxsbc-cps/userparameter_fluxsbc_cps.conf` no arquivo que aparecer
+acima e reinicie o agent:
+
+```bash
+systemctl restart zabbix-agent && zabbix_agentd -t fluxsbc.calls.outbound
+```
+
+No servidor de testes, preencha `ZABBIX_CPS_HOSTS` com os nomes dos dois FS e confira, sem alterar nada:
+
+```bash
+cd /opt/flux-loadtest && ./flux-loadtest.sh zabbix cps-setup --dry-run -c /etc/flux-loadtest/loadtest.conf
+```
+
+O comando mostra a situação das chaves em cada host e para se uma delas vier de outro template. Depois:
+
+```bash
+cd /opt/flux-loadtest && ./flux-loadtest.sh zabbix cps-setup -c /etc/flux-loadtest/loadtest.conf
+```
+
+O token precisa de escrita nos dois FS, de permissão para dashboards e de permissão para criar o grupo
+`Templates/FluxSBC`. Um item `fluxsbc.calls.inbound` criado direto no host passa a herdar do template e deve
+manter o histórico: confira num FS depois do comando.
+
+Com `ZABBIX_CPS_HOSTS` preenchida, o `zabbix setup` também mantém o gráfico `FreeSWITCH: chamadas por
+segundo` na página Servidores do dashboard de resultados.
+
+!!! note "Mudança de escala"
+    A versão anterior do worker contava 2 por chamada: casava também com `Presence-Call-Direction`. O Inbound
+    CPS cai pela metade a partir da troca, e o histórico anterior continua em dobro.
+
+### Como conferir
+
+Em bridge normal, somando os nós: Inbound = CPS do SIPp, Outbound = Inbound e SPS = 2 x Inbound.
+
+Ao trocar a senha do event socket, atualize `/etc/fluxsbc/event_socket.pass` e reinicie o worker. Com a senha
+errada, ele registra a recusa no `journalctl -u fluxsbc-cps` e os contadores param.
