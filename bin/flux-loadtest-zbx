@@ -9,15 +9,17 @@
 # Subcomandos:
 #   discovery        JSON da descoberta (LLD) dos perfis com ZABBIX_ENABLED=1
 #   state            JSON do estado: execucao em andamento e ultimo resultado de cada perfil
-#   start PERFIL     inicia o perfil numa unidade systemd transitoria e retorna na hora
-#   stop             parada suave da execucao (SIGINT no flux-loadtest.sh, como o Ctrl+C)
-#   plan PERFIL      plano do run (--dry-run), resumido
-#   list             nomes dos perfis habilitados (um por linha)
-#   agent-conf       include do zabbix-agentd para os perfis habilitados (UserParameter,
-#                    AllowKey exato por perfil e DenyKey=system.run[*])
-#   finish PERFIL    uso interno: ExecStopPost da unidade grava o resultado no estado
+#   start PERFIL [CPS]   inicia o perfil numa unidade systemd transitoria e retorna na hora
+#   stop                 parada suave da execucao (SIGINT no flux-loadtest.sh, como o Ctrl+C)
+#   plan PERFIL [CPS]    plano do run (--dry-run), resumido
+#   list                 nomes dos perfis habilitados (um por linha)
+#   agent-conf           include do zabbix-agentd para os perfis habilitados (UserParameter,
+#                        AllowKey exato por perfil e por CPS, DenyKey=system.run[*])
+#   finish PERFIL [CPS]  uso interno: ExecStopPost da unidade grava o resultado no estado
 #
 # Perfis: PROFILES_DIR/<nome>.conf (profiles/*.conf.example), CHAVE=valor lido como dado.
+# Perfil com CPS_CHOICES: o CPS vem do operador, um valor da lista, e define a rampa (5 degraus,
+# de CPS/2 a CPS, passo CPS/10). CPS, CPS_START e RAMP_STEP ficam vazios nesse perfil.
 # Configuracao: /etc/flux-loadtest/zabbix-runner.conf (opcional; chaves em RUNNER abaixo).
 # Codigos de saida: 0 ok, 2 uso, 3 configuracao/perfil invalido, 5 recusado (ja em execucao).
 
@@ -43,7 +45,9 @@ declare -A RUNNER=(
 )
 
 # Chaves aceitas no perfil (vazio = padrao do flux-loadtest.sh)
-readonly PROFILE_KEYS="DESC ZABBIX_ENABLED TESTS CPS CPS_START RAMP_STEP RAMP_INTERVAL WINDOW CALLS HOLD MEDIA WEB_DURATION WEB_CONNS MYSQL_DURATION LABEL"
+readonly PROFILE_KEYS="DESC ZABBIX_ENABLED TESTS CPS CPS_CHOICES CPS_START RAMP_STEP RAMP_INTERVAL WINDOW CALLS HOLD MEDIA WEB_DURATION WEB_CONNS MYSQL_DURATION LABEL"
+# Acima deste CPS o start exige os limites de atraso e de memoria do OpenSIPS no loadtest.conf
+readonly CPS_GUARD_FROM=50
 declare -A P=()
 
 # read_kv ARQUIVO NOME_DO_ARRAY CHAVES_ACEITAS: CHAVE=valor, sem executar nada
@@ -78,7 +82,8 @@ valid_name() { [[ ${1:-} =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]]; }
 
 # load_profile NOME: preenche P e valida; falha com mensagem (codigo 3)
 load_profile() {
-    local name=$1 file k
+    local name=$1 file k v prev=0
+    local -a choices=()
     valid_name "${name}" || die "${E_USAGE}" "nome de perfil invalido: '${name}' ([a-z0-9-], ate 32)"
     file="${RUNNER[PROFILES_DIR]}/${name}.conf"
     [[ -r ${file} ]] || die "${E_CONFIG}" "perfil inexistente: ${name} (${file})"
@@ -94,7 +99,17 @@ load_profile() {
     [[ -z ${P[MEDIA]} || ${P[MEDIA]} == rtp || ${P[MEDIA]} == none ]] || die "${E_CONFIG}" "${name}: MEDIA deve ser rtp ou none"
     [[ -z ${P[LABEL]} || ${P[LABEL]} =~ ^[a-z0-9-]{1,32}$ ]] || die "${E_CONFIG}" "${name}: LABEL invalido ([a-z0-9-], ate 32)"
     [[ ${P[DESC]} =~ ^[[:print:]]{0,120}$ ]] || die "${E_CONFIG}" "${name}: DESC com caracteres invalidos ou acima de 120"
-    if [[ ,${P[TESTS]}, == *,sip,* ]]; then
+    if [[ -n ${P[CPS_CHOICES]} ]]; then
+        [[ ,${P[TESTS]}, == *,sip,* ]] || die "${E_CONFIG}" "${name}: CPS_CHOICES exige sip em TESTS"
+        [[ -z ${P[CPS]}${P[CPS_START]}${P[RAMP_STEP]} ]] || die "${E_CONFIG}" "${name}: com CPS_CHOICES, CPS, CPS_START e RAMP_STEP ficam vazios"
+        [[ ${P[CPS_CHOICES]} =~ ^[1-9][0-9]{0,5}(,[1-9][0-9]{0,5})*$ ]] || die "${E_CONFIG}" "${name}: CPS_CHOICES invalido: '${P[CPS_CHOICES]}' (inteiros separados por virgula)"
+        IFS=, read -ra choices <<< "${P[CPS_CHOICES]}"
+        for v in "${choices[@]}"; do
+            ((v > prev)) || die "${E_CONFIG}" "${name}: CPS_CHOICES deve estar em ordem crescente: o primeiro valor e o padrao do menu"
+            ((v <= RUNNER[ZBX_MAX_CPS])) || die "${E_CONFIG}" "${name}: CPS_CHOICES ${v} acima de ZBX_MAX_CPS (${RUNNER[ZBX_MAX_CPS]})"
+            prev=${v}
+        done
+    elif [[ ,${P[TESTS]}, == *,sip,* ]]; then
         [[ -n ${P[CPS]} ]] || die "${E_CONFIG}" "${name}: CPS obrigatorio com TESTS=sip"
         ((P[CPS] >= 1 && P[CPS] <= RUNNER[ZBX_MAX_CPS])) || die "${E_CONFIG}" "${name}: CPS ${P[CPS]} fora de 1-${RUNNER[ZBX_MAX_CPS]} (ZBX_MAX_CPS)"
     fi
@@ -102,7 +117,35 @@ load_profile() {
         || die "${E_CONFIG}" "${name}: WINDOW ${P[WINDOW]} acima de ZBX_MAX_WINDOW (${RUNNER[ZBX_MAX_WINDOW]})"
 }
 
-label_of() { printf 'zbx-%s' "${P[LABEL]:-$1}"; }
+# select_cps NOME [CPS]: com CPS_CHOICES, o valor do operador define CPS e rampa no P carregado
+select_cps() {
+    local name=$1 cps=${2:-}
+    if [[ -z ${P[CPS_CHOICES]} ]]; then
+        [[ -z ${cps} ]] || die "${E_USAGE}" "perfil ${name} tem CPS fixo: nao aceita CPS (${cps})"
+        return 0
+    fi
+    [[ -n ${cps} ]] || die "${E_USAGE}" "perfil ${name} exige um CPS: ${P[CPS_CHOICES]}"
+    # o regex barra virgula no valor, que casaria com um trecho da lista
+    [[ ${cps} =~ ^[1-9][0-9]{0,5}$ && ,${P[CPS_CHOICES]}, == *,"${cps}",* ]] \
+        || die "${E_USAGE}" "CPS invalido para ${name}: '${cps}' (${P[CPS_CHOICES]})"
+    P[CPS]=${cps}
+    P[CPS_START]=$((cps >= 2 ? cps / 2 : 1))
+    P[RAMP_STEP]=$((cps >= 10 ? cps / 10 : 1))
+}
+
+# Rotulo do resultado; com CPS_CHOICES leva o valor, para separar as execucoes do mesmo perfil
+label_of() {
+    printf 'zbx-%s' "${P[LABEL]:-$1}"
+    if [[ -n ${P[CPS_CHOICES]:-} ]]; then printf -- '-%s' "${P[CPS]}"; fi
+}
+
+# Limites dos FS para a carga carregada em P (docs/execucao/degraus-e-perfis.md, "Contas basicas")
+fs_limits_hint() {
+    [[ -n ${P[CPS]} ]] || return 0
+    local sps=$((P[CPS] + 50)) sessions=$((P[CPS] * ${P[HOLD]:-30} * 14 / 10))
+    ((sps >= 150)) || sps=150
+    printf 'nos 2 FS, antes do teste: fs-limites.sh aplicar %s %s (restaurar depois)\n' "${sps}" "${sessions}"
+}
 
 # Argumentos do "flux-loadtest.sh run" para o perfil carregado em P
 RUN_ARGS=()
@@ -156,19 +199,20 @@ except (OSError, ValueError):
 st.setdefault("last", {})
 now = int(time.time())
 if action == "start":
-    st.update(running=1, profile=args[0], started=now, unit=args[1])
+    st.update(running=1, profile=args[0], started=now, unit=args[1], cps=int(args[2] or 0))
 elif action == "finish":
-    prof, rc, result, run_dir = args
+    prof, rc, result, run_dir, cps = args
     st["last"][prof] = {"rc": int(rc) if rc.lstrip("-").isdigit() else -1, "ts": now,
-                        "result": result, "run_dir": run_dir}
+                        "result": result, "run_dir": run_dir, "cps": int(cps or 0)}
     if st.get("profile") == prof:
-        st.update(running=0, profile="", started=0)
+        st.update(running=0, profile="", started=0, cps=0)
 elif action == "show":
     st["running"] = int(args[0])
     if not st["running"]:
-        st.update(profile="", started=0)
+        st.update(profile="", started=0, cps=0)
     st.setdefault("profile", "")
     st.setdefault("started", 0)
+    st.setdefault("cps", 0)
     st["unit"] = args[1]
     print(json.dumps(st, sort_keys=True, separators=(",", ":")))
     sys.exit(0)
@@ -208,9 +252,10 @@ cmd_state() {
 }
 
 cmd_start() {
-    local name=${1:-} fspass
+    local name=${1:-} cps=${2:-} fspass k
     require_root
     load_profile "${name}"
+    select_cps "${name}" "${cps}"
     [[ ${P[ZABBIX_ENABLED]} == 1 ]] || die "${E_CONFIG}" "perfil ${name} sem ZABBIX_ENABLED=1"
     [[ -x ${RUNNER[FLT_BIN]} ]] || die "${E_CONFIG}" "flux-loadtest.sh ausente: ${RUNNER[FLT_BIN]} (FLT_BIN)"
     [[ -r ${RUNNER[FLT_CONF]} ]] || die "${E_CONFIG}" "configuracao ausente: ${RUNNER[FLT_CONF]} (FLT_CONF)"
@@ -218,6 +263,13 @@ cmd_start() {
         # sem terminal nao ha --fs-password: sem o arquivo, as metricas fs_* ficam vazias
         fspass=$(flt_conf_value FS_CLI_PASSWORD_FILE)
         [[ -n ${fspass} && -r ${fspass} ]] || die "${E_CONFIG}" "FS_CLI_PASSWORD_FILE vazio ou ilegivel em ${RUNNER[FLT_CONF]}"
+        # atraso e memoria do OpenSIPS atingem tambem as chamadas reais; o guard padrao nao os vigia
+        if ((P[CPS] > CPS_GUARD_FROM)); then
+            for k in GUARD_MAX_PDD_MS GUARD_MAX_OS_SHM_PCT; do
+                [[ $(flt_conf_value "${k}") =~ ^[1-9][0-9]*$ ]] \
+                    || die "${E_CONFIG}" "${k} vazio ou 0 em ${RUNNER[FLT_CONF]}: obrigatorio acima de ${CPS_GUARD_FROM} CPS"
+            done
+        fi
     fi
     build_args "${name}"
     lock
@@ -226,15 +278,16 @@ cmd_start() {
     fi
     systemctl reset-failed "${UNIT}" >/dev/null 2>&1 || true
     systemd-run --quiet --unit="${UNIT}" --collect \
-        --description="flux-loadtest (Zabbix): perfil ${name}" \
+        --description="flux-loadtest (Zabbix): perfil ${name}${cps:+ a ${cps} CPS}" \
         --setenv=FLT_ZBX_RUNNER_CONF="${RUNNER_CONF}" \
         --property=TimeoutStopSec=900 \
-        --property=ExecStopPost="${SELF_BIN} finish ${name}" \
+        --property=ExecStopPost="${SELF_BIN} finish ${name}${cps:+ ${cps}}" \
         "${RUNNER[FLT_BIN]}" "${RUN_ARGS[@]}" --confirm-prod -y \
         || die "${E_CONFIG}" "systemd-run falhou (journalctl -u ${UNIT})"
-    json_state start "${name}" "${UNIT}"
+    json_state start "${name}" "${UNIT}" "${P[CPS]}"
     printf 'iniciado: perfil %s (unidade %s, rotulo %s). Acompanhe no host <prefixo>run; parar: stop\n' \
         "${name}" "${UNIT}" "$(label_of "${name}")"
+    fs_limits_hint
 }
 
 cmd_stop() {
@@ -250,33 +303,38 @@ cmd_stop() {
 }
 
 cmd_finish() {
-    local name=${1:-} rc=${EXIT_STATUS:-} result=${SERVICE_RESULT:-?} results run_dir=""
+    local name=${1:-} cps=${2:-} rc=${EXIT_STATUS:-} result=${SERVICE_RESULT:-?} results run_dir=""
     require_root
     valid_name "${name}" || die "${E_USAGE}" "finish: perfil invalido"
+    [[ -z ${cps} || ${cps} =~ ^[1-9][0-9]{0,5}$ ]] || die "${E_USAGE}" "finish: CPS invalido"
     [[ ${EXIT_CODE:-exited} == exited && ${rc} =~ ^[0-9]+$ ]] || rc=-1
     P=([LABEL]="")
     load_profile "${name}" >/dev/null 2>&1 || true
+    [[ -z ${cps} ]] || P[CPS]=${cps}
     results=$(flt_conf_value RESULTS_DIR 2>/dev/null || true)
     results=${results:-/var/lib/flux-loadtest/results}
     run_dir=$(find "${results}" -maxdepth 1 -type d -name "*-$(label_of "${name}")" -printf '%T@ %p\n' 2>/dev/null \
         | sort -nr | awk 'NR == 1 { print $2 }') || true
     lock
-    json_state finish "${name}" "${rc}" "${result}" "${run_dir}"
+    json_state finish "${name}" "${rc}" "${result}" "${run_dir}" "${P[CPS]:-}"
 }
 
 cmd_plan() {
-    local name=${1:-}
+    local name=${1:-} cps=${2:-}
     load_profile "${name}"
+    select_cps "${name}" "${cps}"
     build_args "${name}"
     printf 'perfil %s: %s\n' "${name}" "${P[DESC]:-sem descricao}"
     printf 'flux-loadtest.sh'
     printf ' %q' "${RUN_ARGS[@]}" --confirm-prod -y
-    printf '\n\n'
+    printf '\n'
+    fs_limits_hint
+    printf '\n'
     timeout 25 "${RUNNER[FLT_BIN]}" "${RUN_ARGS[@]}" --dry-run 2>&1 | head -n 60 || true
 }
 
 cmd_agent_conf() {
-    local name cmd="sudo -n ${SELF_BIN}"
+    local name v cmd="sudo -n ${SELF_BIN}"
     printf '# gerado por flux-loadtest-zbx agent-conf (flux-loadtest, WEB-1437): nao editar\n'
     printf '# Comandos remotos so para os perfis habilitados; qualquer outro system.run e recusado.\n'
     printf 'UserParameter=flt.profiles.discovery,%s discovery\n' "${cmd}"
@@ -284,14 +342,23 @@ cmd_agent_conf() {
     printf 'AllowKey=system.run[%s stop]\n' "${cmd}"
     printf 'AllowKey=system.run[%s state]\n' "${cmd}"
     enabled_profiles | while read -r name; do
-        printf 'AllowKey=system.run[%s start %s]\n' "${cmd}" "${name}"
-        printf 'AllowKey=system.run[%s plan %s]\n' "${cmd}" "${name}"
+        load_profile "${name}"
+        if [[ -z ${P[CPS_CHOICES]} ]]; then
+            printf 'AllowKey=system.run[%s start %s]\n' "${cmd}" "${name}"
+            printf 'AllowKey=system.run[%s plan %s]\n' "${cmd}" "${name}"
+            continue
+        fi
+        # sem curinga: o system.run passa pelo shell, e "start perfil *" aceitaria "100; id"
+        for v in ${P[CPS_CHOICES]//,/ }; do
+            printf 'AllowKey=system.run[%s start %s %s]\n' "${cmd}" "${name}" "${v}"
+            printf 'AllowKey=system.run[%s plan %s %s]\n' "${cmd}" "${name}" "${v}"
+        done
     done
     printf 'DenyKey=system.run[*]\n'
 }
 
 usage() {
-    sed -n '3,25p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,24p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 main() {
@@ -305,10 +372,10 @@ main() {
         discovery)  cmd_discovery ;;
         state)      cmd_state ;;
         list)       enabled_profiles ;;
-        start)      (($# == 1)) || die "${E_USAGE}" "uso: start PERFIL"; cmd_start "$1" ;;
+        start)      (($# == 1 || $# == 2)) || die "${E_USAGE}" "uso: start PERFIL [CPS]"; cmd_start "$@" ;;
         stop)       (($# == 0)) || die "${E_USAGE}" "uso: stop"; cmd_stop ;;
-        plan)       (($# == 1)) || die "${E_USAGE}" "uso: plan PERFIL"; cmd_plan "$1" ;;
-        finish)     cmd_finish "${1:-}" ;;
+        plan)       (($# == 1 || $# == 2)) || die "${E_USAGE}" "uso: plan PERFIL [CPS]"; cmd_plan "$@" ;;
+        finish)     cmd_finish "${1:-}" "${2:-}" ;;
         agent-conf) cmd_agent_conf ;;
         *)          die "${E_USAGE}" "subcomando invalido: ${sub} (veja --help)" ;;
     esac

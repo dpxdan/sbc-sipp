@@ -110,12 +110,13 @@ Zabbix (menu Flux Loadtest do host <prefixo>gen)
 | Peça | Onde | Função |
 |---|---|---|
 | Perfis | `/etc/flux-loadtest/profiles.d/<perfil>.conf` | Parâmetros do `run` (`TESTS`, `CPS`, `WINDOW`, `HOLD`, `MEDIA`...), lidos como dado; `ZABBIX_ENABLED=1` publica o perfil |
-| Tetos | `/etc/flux-loadtest/zabbix-runner.conf` (exemplo em `profiles/zabbix-runner.conf.example`) | `ZBX_MAX_CPS` (padrão 50) e `ZBX_MAX_WINDOW` (padrão 3600 s) |
+| Tetos | `/etc/flux-loadtest/zabbix-runner.conf` (exemplo em `profiles/zabbix-runner.conf.example`; STFC em `deploy/stfc-completo/zabbix-runner.conf`) | `ZBX_MAX_CPS` (padrão 50; STFC 300) e `ZBX_MAX_WINDOW` (padrão 3600 s) |
 | Wrapper | `/usr/local/sbin/flux-loadtest-zbx` | Valida o perfil, aplica os tetos, dispara a unidade systemd e grava o estado |
-| Include do agent | diretório do `Include=` do `zabbix_agentd.conf` | `AllowKey` exato por perfil e `DenyKey=system.run[*]` |
-| Scripts globais | menu **Flux Loadtest** | Iniciar perfil, Plano (dry-run), Parar teste, Estado |
+| Include do agent | diretório do `Include=` do `zabbix_agentd.conf` | `AllowKey` exato por perfil (e por CPS, nos perfis com `CPS_CHOICES`) e `DenyKey=system.run[*]` |
+| Scripts globais | menu **Flux Loadtest** | Iniciar perfil, Plano (dry-run), Parar teste, Estado; `Iniciar <perfil> (CPS)` e `Plano <perfil> (CPS)` para cada perfil com `CPS_CHOICES` |
 
-Preparação (servidor de testes, como root):
+Preparação (servidor de testes, como root). O `zabbix-runner.conf` vem antes do `prepare`: um perfil
+acima do teto fica fora do include do agent. No STFC, use `deploy/stfc-completo/zabbix-runner.conf`:
 
 ```bash
 install -d -m 0755 /etc/flux-loadtest/profiles.d && install -m 0644 /opt/flux-loadtest/deploy/stfc-completo/profiles/stfc-*.conf /etc/flux-loadtest/profiles.d/
@@ -144,6 +145,25 @@ No `loadtest.conf`, `ZABBIX_GEN_AGENT` (e, se quiser, `ZABBIX_SCRIPT_USRGRP`). D
 ```
 
 Uso: *Monitoring > Hosts*, menu do host `flt-gen` > **Flux Loadtest** > Iniciar perfil.
+
+### Perfil com CPS escolhido
+
+Um perfil com `CPS_CHOICES` (no STFC, `stfc-cps-livre`) não aparece em **Iniciar perfil**. Ele ganha dois
+scripts próprios, porque o Zabbix aceita uma única entrada por script:
+
+| Script | Entrada | Efeito |
+|---|---|---|
+| `Plano stfc-cps-livre (CPS)` | Lista de CPS | Plano do `run` e o `fs-limites.sh aplicar` daquele valor, sem executar nada |
+| `Iniciar stfc-cps-livre (CPS)` | Lista de CPS | Pede confirmação com o valor e inicia o teste |
+
+O valor define a rampa (de CPS/2 a CPS, passo CPS/10) e o rótulo do resultado
+(`zbx-stfc-cps-livre-100`). O script **Estado** mostra o CPS da execução em andamento e o da última de
+cada perfil. Acima de 50 CPS, o wrapper exige `GUARD_MAX_PDD_MS` e `GUARD_MAX_OS_SHM_PCT` no
+`loadtest.conf` ([pré-requisitos](../execucao/degraus-e-perfis.md#2-acima-de-50-cps)).
+
+Depois de mudar `CPS_CHOICES`, repita o `flux-host.sh prepare zabbix-agent` (os `AllowKey`) e o
+`zabbix setup --scripts` (a lista do menu).
+
 Diagnóstico:
 
 ```bash
@@ -157,10 +177,11 @@ journalctl -u flux-loadtest-zbx -n 50 --no-pager
 
 Segurança do disparo:
 
-- o include libera **só os comandos exatos** de cada perfil habilitado; `system.run[id]` e
-  `...start piloto; id` são recusados;
-- o wrapper revalida o nome do perfil (`[a-z0-9-]`), as chaves e os valores, e recusa CPS e janela
-  acima dos tetos;
+- o include libera **só os comandos exatos** de cada perfil habilitado, um por valor de `CPS_CHOICES`,
+  sem curinga (o `system.run` passa pelo shell); `system.run[id]`, `...start piloto; id` e um CPS fora
+  da lista são recusados;
+- o wrapper revalida o nome do perfil (`[a-z0-9-]`), as chaves, os valores e o CPS escolhido, e recusa
+  CPS e janela acima dos tetos;
 - uma execução por vez (trava + unidade systemd única);
 - "Parar teste" manda SIGINT só ao processo principal: parada suave, cooldown e relatório
   (código 6).

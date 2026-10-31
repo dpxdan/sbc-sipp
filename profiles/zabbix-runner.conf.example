@@ -5,7 +5,9 @@
 #
 # ZBX_MAX_CPS e ZBX_MAX_WINDOW sao tetos para todos os perfis: o wrapper recusa um perfil com
 # CPS ou janela acima deles. Ajuste abaixo do limite pratico do alvo (sessions-per-second / 2
-# para CPS, porque cada chamada de teste abre 2 sessoes no FreeSWITCH).
+# para CPS, porque cada chamada de teste abre 2 sessoes no FreeSWITCH). Vale tambem para cada valor
+# de CPS_CHOICES. Instale este arquivo antes do "flux-host.sh prepare zabbix-agent": perfil acima do
+# teto fica fora do include do agent. O STFC tem o proprio: deploy/stfc-completo/zabbix-runner.conf.
 
 FLT_BIN=/opt/flux-loadtest/flux-loadtest.sh
 FLT_CONF=/etc/flux-loadtest/loadtest.conf

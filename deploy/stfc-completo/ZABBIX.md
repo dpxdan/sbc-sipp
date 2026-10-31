@@ -201,14 +201,27 @@ Perfis do STFC (deste diretório):
 | `stfc-cps30` | 30 CPS sustentados por ~220 s (hold de 30 s): banco, `sps` e o A1; exige `fs-limites 150 1300` |
 | `stfc-cps-escada50` | Escada de 10 a 50 CPS (+5 a cada 60 s, hold de 10 s) para achar o limite de CPS; exige `fs-limites 150 1300` e `GUARD_MAX_PDD_MS` |
 | `stfc-cps-escada-fina` | Escada de 16 a 26 CPS (+2 a cada 60 s, hold de 10 s), rodadas A e B do A/B do core db; exige `fs-limites 150 1300` e `GUARD_MAX_PDD_MS` |
+| `stfc-cps-escada100` | Escada de 50 a 100 CPS (+10 a cada 60 s, hold de 10 s); exige `fs-limites 150 1400` e os guards de atraso e de memória do OpenSIPS |
+| `stfc-cps-escada200` | Escada de 100 a 200 CPS (+20 a cada 60 s, hold de 10 s); exige `fs-limites 250 2800`, os mesmos guards e `-m` do OpenSIPS maior |
+| `stfc-cps-escada300` | Escada de 150 a 300 CPS (+30 a cada 60 s, hold de 10 s); exige `fs-limites 350 4200`, os mesmos guards e `-m` do OpenSIPS maior |
+| `stfc-cps-livre` | CPS escolhido no menu, de 10 a 300 (scripts `Iniciar stfc-cps-livre (CPS)` e `Plano stfc-cps-livre (CPS)`); o Plano mostra os limites do valor |
 | `stfc-c1000` | 1000 simultâneas a 10 CPS |
 | `stfc-c1000-rtp` | Igual ao `stfc-c1000`, com RTP G.711 nos dois sentidos (A/B de mídia); exige DIDs com `bypass_media = 0` |
 | `stfc-c2000` | 2000 simultâneas a 10 CPS (hold de 200 s); exige limites maiores nos FS |
 | `stfc-c3000` | 3000 simultâneas a 10 CPS (hold de 300 s); exige limites maiores nos FS |
 | `stfc-c5000` | 5000 simultâneas a 10 CPS (hold de 500 s); exige limites maiores nos FS |
 
-O wrapper recusa CPS acima de 50 e janela acima de 3600 s
-(`/etc/flux-loadtest/zabbix-runner.conf`; exemplo em `profiles/zabbix-runner.conf.example`).
+O wrapper recusa CPS acima de `ZBX_MAX_CPS` e janela acima de 3600 s
+(`/etc/flux-loadtest/zabbix-runner.conf`). O padrão é 50; o arquivo do STFC, deste diretório, sobe para
+300. Instale-o antes do `prepare zabbix-agent`, senão os perfis acima de 50 ficam fora do include:
+
+```bash
+install -m 0644 /opt/flux-loadtest/deploy/stfc-completo/zabbix-runner.conf /etc/flux-loadtest/zabbix-runner.conf
+```
+
+O teto só permite o disparo: a capacidade medida é de 50 CPS (28/10/2026). Pré-requisitos acima disso em
+`docs/execucao/degraus-e-perfis.md`, "Acima de 50 CPS". O `/etc/flux-loadtest/loadtest.conf` precisa de
+`GUARD_MAX_PDD_MS` e `GUARD_MAX_OS_SHM_PCT`: sem eles, o wrapper recusa o disparo acima de 50 CPS.
 
 ### Perfis de 2000, 3000 e 5000 simultâneas
 
@@ -302,6 +315,10 @@ Os perfis de simultâneas ficam em 10 CPS e não medem o que cresce com o CPS: e
 | `stfc-cps30` | 10 a 30 CPS em 80 s (+5 a cada 20 s) | ~220 s em 30 CPS | ~900 (hold 30 s) | ~10 min | `150 1300` |
 | `stfc-cps-escada50` | 10 a 50 CPS (+5 a cada 60 s) | 60 s por degrau, 180 s em 50 CPS | ~600 (hold 10 s) | ~16 min | `150 1300` |
 | `stfc-cps-escada-fina` | 16 a 26 CPS (+2 a cada 60 s) | 60 s por degrau, 120 s em 26 CPS | ~300 (hold 10 s) | ~12 min | `150 1300` |
+| `stfc-cps-escada100` | 50 a 100 CPS (+10 a cada 60 s) | 60 s por degrau, 180 s em 100 CPS | ~1000 (hold 10 s) | ~13 min | `150 1400` |
+| `stfc-cps-escada200` | 100 a 200 CPS (+20 a cada 60 s) | 60 s por degrau, 180 s em 200 CPS | ~2000 (hold 10 s) | ~13 min | `250 2800` |
+| `stfc-cps-escada300` | 150 a 300 CPS (+30 a cada 60 s) | 60 s por degrau, 180 s em 300 CPS | ~3000 (hold 10 s) | ~13 min | `350 4200` |
+| `stfc-cps-livre` | CPS/2 a CPS (+CPS/10 a cada 60 s), CPS de 10 a 300 | 60 s por degrau, 180 s no alvo | CPS x 10 (hold 10 s) | ~13 min | Mostrado pelo Plano |
 
 O `sps` do FS conta sessões, não chamadas: 30 CPS x 2 sessões x ~55% no .162 = ~33 por FS, longe
 de 150. Na página Gargalos, acompanhe `MySQL: latencia media`, `PXC: replicacao pausada por flow
@@ -345,7 +362,8 @@ cd /opt/flux-loadtest && ./flux-loadtest.sh zabbix setup --scripts -c /etc/flux-
 ```
 
 Uso: *Monitoring > Hosts*, menu do host `flt-gen` > **Flux Loadtest** > Iniciar perfil
-(com confirmação), Plano (dry-run), Parar teste (parada suave), Estado. O teste com SIP exige
+(com confirmação), Plano (dry-run), `Iniciar stfc-cps-livre (CPS)` e `Plano stfc-cps-livre (CPS)` (com a
+lista de CPS), Parar teste (parada suave), Estado. O teste com SIP exige
 `FS_CLI_PASSWORD_FILE` no `loadtest.conf`, já usado na campanha. Diagnóstico:
 
 ```bash

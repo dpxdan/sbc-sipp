@@ -109,6 +109,7 @@ Numa VM de teste dentro da rede interna, use os IPs 172.17.4.x.
 | `GUARD_MIN_DISK_FREE_PCT` | `15` | | Disco livre mínimo (`FS_DISK_PATH`, `MYSQL_DISK_PATH`, `/`) |
 | `GUARD_MAX_FAIL_PCT` | `5` | `2` | Falha SIP no período (mínimo de 10 chamadas) |
 | `GUARD_MAX_PDD_MS` | `0` | `2000` | INVITE -> 200 médio do período, em ms (mínimo de 10 chamadas; `0` desliga) |
+| `GUARD_MAX_OS_SHM_PCT` | `0` | `80` | Memória compartilhada do OpenSIPS em uso (`0` desliga). Acima de 50 CPS, o disparo pelo Zabbix exige este limite e o `GUARD_MAX_PDD_MS` |
 | `GUARD_MAX_REPL_LAG` | `30` | | Atraso de replicação assíncrona (s); não se aplica ao PXC |
 | `GUARD_MAX_WSREP_FC_PCT` | `10` | | Fração do intervalo com a replicação pausada por flow control (`0` desliga) |
 | `GUARD_MIN_WSREP_CLUSTER_SIZE` | `0` | `2` | Tamanho mínimo do cluster (`0` desliga) |

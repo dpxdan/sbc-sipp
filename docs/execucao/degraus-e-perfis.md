@@ -80,6 +80,10 @@ equivalem às opções do `run`).
 | `stfc-cps30` | 10 a 30 CPS em 80 s (+5 a cada 20 s), ~220 s em 30 CPS, hold 30 s (~900 simultâneas) | ~10 min | `150 1300` |
 | `stfc-cps-escada50` | Escada de 10 a 50 CPS (+5 a cada 60 s), mais 120 s em 50, hold 10 s (~600 simultâneas) | ~16 min | `150 1300` |
 | `stfc-cps-escada-fina` | Escada de 16 a 26 CPS (+2 a cada 60 s), mais 60 s em 26, hold 10 s (~300 simultâneas) | ~12 min | `150 1300` |
+| `stfc-cps-escada100` | Escada de 50 a 100 CPS (+10 a cada 60 s), mais 180 s em 100, hold 10 s (~1000 simultâneas) | ~13 min | `150 1400` |
+| `stfc-cps-escada200` | Escada de 100 a 200 CPS (+20 a cada 60 s), mais 180 s em 200, hold 10 s (~2000 simultâneas) | ~13 min | `250 2800` |
+| `stfc-cps-escada300` | Escada de 150 a 300 CPS (+30 a cada 60 s), mais 180 s em 300, hold 10 s (~3000 simultâneas) | ~13 min | `350 4200` |
+| `stfc-cps-livre` | CPS escolhido no menu, de 10 a 300: rampa de CPS/2 a CPS em 5 degraus de 60 s, mais 180 s no alvo, hold 10 s | ~13 min | Mostrado pelo Plano |
 | `stfc-c1000` | 1000 simultâneas a 10 CPS (janela 150 s, hold 100 s) | ~9 min | — |
 | `stfc-c1000-rtp` | Igual ao `stfc-c1000`, com `MEDIA=rtp` (G.711 nos dois sentidos) | ~9 min | — |
 | `stfc-c2000` | 2000 simultâneas a 10 CPS (janela 320 s, hold 200 s, 120 s no patamar, `-l` 2448) | ~13 min | `150 2800` |
@@ -93,7 +97,9 @@ e coloca ~180 Mbit/s por sentido no gerador.
 
 Ordem recomendada: `stfc-piloto` -> `stfc-c1000` -> `stfc-c2000` -> `stfc-c3000` -> `stfc-c5000` (só depois de um
 `stfc-c3000` sem falhas) e, separadamente, `stfc-cps20` -> `stfc-cps30` -> `stfc-cps-escada50`
-(e a `stfc-cps-escada-fina` em volta do teto encontrado).
+(e a `stfc-cps-escada-fina` em volta do teto encontrado) -> `stfc-cps-escada100` -> `stfc-cps-escada200` ->
+`stfc-cps-escada300`, cada um só depois do anterior sem o guard disparar. Com o `stfc-cps-livre`, faça a
+escada fina em volta do teto encontrado.
 
 Antes de perfis longos, tire uma foto de capacidade com o hold planejado. Ela alerta timeout de mídia
 menor que o hold (com `MEDIA=none` não há RTP e as chamadas cairiam), memória, threads e portas RTP:
@@ -161,8 +167,23 @@ Depois, nos dois FS: `fs-limites.sh restaurar`.
 
 ### 2. Acima de 50 CPS
 
-Só se a escada chegar a 50 CPS sem degradar. O menu do Zabbix recusa perfis acima de `ZBX_MAX_CPS`
-(50), então o disparo é pela linha de comando, depois de `fs-limites.sh aplicar 250 2000` nos dois FS:
+Só se a escada chegar a 50 CPS sem degradar. Use os perfis `stfc-cps-escada100`, `200` e `300` ou o
+`stfc-cps-livre`, em que o operador escolhe o CPS no menu do Zabbix. Todos usam hold de 10 s, então
+simultâneas = CPS x 10: as combinações 100/1000, 200/2000 e 300/3000 da issue.
+
+| Pré-requisito | Por quê |
+|---|---|
+| `ZBX_MAX_CPS=300` no `/etc/flux-loadtest/zabbix-runner.conf` | Com o teto padrão (50), o wrapper recusa os perfis e eles ficam fora do include do agent. O arquivo do STFC é `deploy/stfc-completo/zabbix-runner.conf` |
+| `GUARD_MAX_PDD_MS` e `GUARD_MAX_OS_SHM_PCT` no `loadtest.conf` | Acima de 50 CPS, o wrapper recusa o disparo com um deles vazio ou em 0. Atraso e memória esgotada do OpenSIPS atingem também as chamadas reais |
+| `fs-limites.sh aplicar` nos dois FS | O valor de cada perfil está na tabela de perfis; o Plano mostra o do CPS escolhido |
+| `-m` do OpenSIPS maior, acima de ~100 CPS | Em 28/10/2026, a memória compartilhada chegou a 40% de 64 MB a 50 CPS: esgota por volta de 130-150 CPS. Exige restart, em janela própria. Sem isso, o guard para o teste em 80% |
+| CPU dos FS | ~10% de um núcleo por CPS em cada nó: teto projetado de 130-160 CPS. Acima disso, o `GUARD_MAX_CPU_PCT` para o teste. Para 300 CPS, é preciso reduzir a CPU por chamada ou aumentar FS/vCPU |
+
+!!! warning "O teto não é a capacidade"
+    `ZBX_MAX_CPS=300` só permite o disparo. A capacidade medida é de 50 CPS (28/10/2026) e, sem os
+    ajustes acima, a expectativa é o guard parar a escada: o patamar em que ele parou é o resultado.
+
+Pela linha de comando, as mesmas cargas (ex.: `stfc-cps-escada100`):
 
 ```bash
 ./flux-loadtest.sh run -c /etc/flux-loadtest/loadtest.conf --confirm-prod -t sip -r 100 --cps-start 50 --ramp-step 10 --ramp-interval 60 -w 480 -H 10 -M none --label stfc-cps-escada100
@@ -207,5 +228,9 @@ LABEL=meu-perfil
 - Nome do arquivo = nome do perfil: `[a-z0-9-]`, até 32 caracteres.
 - Chave vazia = padrão do `flux-loadtest.sh`.
 - `CPS` e `WINDOW` não podem passar de `ZBX_MAX_CPS` e `ZBX_MAX_WINDOW` (`zabbix-runner.conf`).
+- Para o operador escolher o CPS no menu, troque `CPS` por `CPS_CHOICES=60,80,100` (crescente; o
+  primeiro é o padrão do menu) e deixe `CPS`, `CPS_START` e `RAMP_STEP` vazios: a rampa vai de CPS/2 a
+  CPS, com passo CPS/10. Dimensione `WINDOW` para os 5 degraus mais o tempo no alvo. Cada valor da lista
+  vira um `AllowKey` exato no agent, e cada execução ganha o rótulo `zbx-<rótulo>-<CPS>`.
 - Depois de criar ou alterar um perfil, rode de novo o `flux-host.sh prepare zabbix-agent` e o
   `zabbix setup --scripts` (veja [Zabbix](../configuracao/zabbix.md#5-disparo-de-perfis-pelo-menu-do-zabbix)).

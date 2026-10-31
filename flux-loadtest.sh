@@ -75,7 +75,7 @@ declare -A CFG=(
     [MYSQL_BENCH_TABLE_SIZE]="100000" [MYSQL_BENCH_THREADS]="8" [MYSQL_BENCH_EXTRA_ARGS]=""
     [GUARD_MAX_CPU_PCT]="85" [GUARD_MAX_GEN_CPU_PCT]="90" [GUARD_MAX_MEM_PCT]="90"
     [GUARD_MIN_DISK_FREE_PCT]="15" [GUARD_MAX_FAIL_PCT]="5" [GUARD_MAX_PDD_MS]="0" [GUARD_MAX_REPL_LAG]="30"
-    [GUARD_MAX_CORE_PCT]="0" [GUARD_HITS]="3"
+    [GUARD_MAX_CORE_PCT]="0" [GUARD_MAX_OS_SHM_PCT]="0" [GUARD_HITS]="3"
     [GUARD_MAX_WSREP_FC_PCT]="10" [GUARD_MIN_WSREP_CLUSTER_SIZE]="0"
     [SAMPLE_INTERVAL]="5" [BASELINE_SECONDS]="60" [COOLDOWN_SECONDS]="60"
     [CAPACITY_ALERT_PCT]="80"
@@ -118,7 +118,7 @@ validate_config() {
                VM_BYTES_PER_SECOND MYSQL_BENCH_PORT MYSQL_BENCH_TABLES MYSQL_BENCH_TABLE_SIZE \
                MYSQL_BENCH_THREADS GUARD_MAX_CPU_PCT GUARD_MAX_GEN_CPU_PCT GUARD_MAX_MEM_PCT \
                GUARD_MIN_DISK_FREE_PCT GUARD_MAX_FAIL_PCT GUARD_MAX_PDD_MS GUARD_MAX_REPL_LAG GUARD_MAX_CORE_PCT \
-               GUARD_HITS GUARD_MAX_WSREP_FC_PCT GUARD_MIN_WSREP_CLUSTER_SIZE \
+               GUARD_MAX_OS_SHM_PCT GUARD_HITS GUARD_MAX_WSREP_FC_PCT GUARD_MIN_WSREP_CLUSTER_SIZE \
                SAMPLE_INTERVAL BASELINE_SECONDS COOLDOWN_SECONDS ZABBIX_PORT UAS_RTP_PORT_BASE \
                CAPACITY_ALERT_PCT; do
         is_uint "${CFG[${key}]}" || die "${E_CONFIG}" "${key} deve ser inteiro: '${CFG[${key}]}'"
@@ -565,7 +565,7 @@ host_violations() {
     awk -F, -v maxcpu="${maxcpu}" -v maxmem="${CFG[GUARD_MAX_MEM_PCT]}" \
         -v mindisk="${CFG[GUARD_MIN_DISK_FREE_PCT]}" -v maxcore="${CFG[GUARD_MAX_CORE_PCT]}" \
         -v maxlag="${CFG[GUARD_MAX_REPL_LAG]}" -v maxfc="${CFG[GUARD_MAX_WSREP_FC_PCT]}" \
-        -v minsize="${CFG[GUARD_MIN_WSREP_CLUSTER_SIZE]}" '
+        -v minsize="${CFG[GUARD_MIN_WSREP_CLUSTER_SIZE]}" -v maxshm="${CFG[GUARD_MAX_OS_SHM_PCT]}" '
         NR == 1 { for (i = 1; i <= NF; i++) c[$i] = i; n = NF; next }
         NF == n { l = $0 }
         function g(k,   x) { x = (k in c) ? v[c[k]] : ""; return x }
@@ -577,6 +577,7 @@ host_violations() {
             if (g("mem_used_pct") != "" && g("mem_used_pct") + 0 > maxmem) out = out " mem=" g("mem_used_pct")
             if (g("disk_free_pct") != "" && g("disk_free_pct") + 0 < mindisk) out = out " disco_livre=" g("disk_free_pct")
             if (maxcore > 0 && g("cpu_max_core_pct") + 0 > maxcore) out = out " nucleo=" g("cpu_max_core_pct")
+            if (maxshm > 0 && g("os_shm_used_pct") != "" && g("os_shm_used_pct") + 0 > maxshm) out = out " memoria_compartilhada=" g("os_shm_used_pct")
             if (g("db_repl_lag") != "" && g("db_repl_lag") + 0 > maxlag) out = out " replicacao=" g("db_repl_lag") "s"
             if (g("db_repl_ok") == "0") out = out " replicacao_parada=1"
             # Percona XtraDB Cluster: 4 = Synced; Primary = no com quorum
@@ -2074,6 +2075,7 @@ print_plan() {
         "${CFG[GUARD_MAX_CORE_PCT]}" "${CFG[GUARD_HITS]}"
     printf '  limites cluster    no nao Synced, sem quorum, flow_control>%s%% (0=off), cluster_size<%s (0=off)\n' \
         "${CFG[GUARD_MAX_WSREP_FC_PCT]}" "${CFG[GUARD_MIN_WSREP_CLUSTER_SIZE]}"
+    printf '  limites opensips   memoria compartilhada>%s%% (0=off)\n' "${CFG[GUARD_MAX_OS_SHM_PCT]}"
     printf '  resultados         %s\n\n' "${RUN_DIR}"
 }
 
