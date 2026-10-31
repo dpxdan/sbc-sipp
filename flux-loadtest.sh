@@ -43,6 +43,7 @@ readonly UAS_TPL="${SCRIPT_DIR}/scenarios/uas-answer.xml.in"
 readonly UAS_CONTROL_PORT=8889
 readonly ZBX_HELPER="${SCRIPT_DIR}/lib/flux_zabbix.py"
 readonly ZBX_TEMPLATE="${SCRIPT_DIR}/zabbix/flux-loadtest-templates.yaml"
+readonly ZBX_CPS_TEMPLATE="${SCRIPT_DIR}/zabbix/fluxsbc-cps-template.yaml"
 readonly UA="flux-loadtest/${VERSION}"
 
 # Codigos de saida
@@ -83,6 +84,7 @@ declare -A CFG=(
     [ZABBIX_SERVER]="" [ZABBIX_PORT]="10051" [ZABBIX_HOST_PREFIX]="flt-" [ZABBIX_LIVE]="1"
     [ZABBIX_API_URL]="" [ZABBIX_API_TOKEN_FILE]="" [ZABBIX_TLS_INSECURE]="0"
     [ZABBIX_GEN_AGENT]="" [ZABBIX_SCRIPT_USRGRP]="" [ZABBIX_PROFILES_DIR]="/etc/flux-loadtest/profiles.d"
+    [ZABBIX_CPS_HOSTS]=""
 )
 
 load_config() {
@@ -989,6 +991,9 @@ Uso: $0 zabbix <sub> [opcoes] [-c ARQUIVO]
                              Com ZABBIX_GEN_AGENT, o host gen ganha a interface agent e o
                              template de disparo; --scripts cria os scripts do menu Flux
                              Loadtest (perfis de ZABBIX_PROFILES_DIR, grupo ZABBIX_SCRIPT_USRGRP)
+  cps-setup [--dry-run]      importa o template "FluxSBC - CPS FreeSWITCH", vincula aos hosts de
+                             ZABBIX_CPS_HOSTS e cria/atualiza o dashboard global de mesmo nome.
+                             --dry-run so confere os hosts e os itens, sem alterar nada
   send <diretorio> [--force] [--dry-run]
                              importa uma execucao com os timestamps originais (--force reenvia
                              uma execucao ja enviada; --dry-run so mostra os valores)
@@ -997,7 +1002,8 @@ EOF
 }
 
 cmd_zabbix() {
-    local sub=${1:-} opt import=0 scripts=0 force=0 dry=0 dir="" id
+    local sub=${1:-} opt import=0 scripts=0 force=0 dry=0 dir="" id name
+    local -a cps_hosts=()
     (($# > 0)) && shift
     check_local_deps python3
     case "${sub}" in
@@ -1023,7 +1029,28 @@ cmd_zabbix() {
                 ZBX_ARGS+=(--host "${id}:${HOST_ROLE[${id}]}:${HOST_ADDR[${id}]}")
             done
             ZBX_ARGS+=(--host "gen:gen::vm-teste")
+            IFS=, read -ra cps_hosts <<< "${CFG[ZABBIX_CPS_HOSTS]}"
+            for name in "${cps_hosts[@]+"${cps_hosts[@]}"}"; do
+                ZBX_ARGS+=(--cps-host "${name}")
+            done
             python3 "${ZBX_HELPER}" setup "${ZBX_ARGS[@]}"
+            ;;
+        cps-setup)
+            for opt in "$@"; do
+                case "${opt}" in
+                    --dry-run) dry=1 ;;
+                    *) usage_zabbix >&2; die "${E_USAGE}" "opcao invalida para zabbix cps-setup: ${opt}" ;;
+                esac
+            done
+            require_cfg ZABBIX_CPS_HOSTS
+            zbx_api_args
+            ZBX_ARGS+=(--template "${ZBX_CPS_TEMPLATE}")
+            ((dry)) && ZBX_ARGS+=(--dry-run)
+            IFS=, read -ra cps_hosts <<< "${CFG[ZABBIX_CPS_HOSTS]}"
+            for name in "${cps_hosts[@]}"; do
+                ZBX_ARGS+=(--cps-host "${name}")
+            done
+            python3 "${ZBX_HELPER}" cps-setup "${ZBX_ARGS[@]}"
             ;;
         send)
             for opt in "$@"; do
