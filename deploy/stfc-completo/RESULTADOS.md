@@ -60,7 +60,7 @@ Massa de teste:
 - **Conta:** 211, sem tarifa, `credit_limit` 10.000.000, `maxchannels` 0.
 - **DIDs:** 100.000 DIRECT-IP, de `5500000000000` a `5500000099999` (DDD 00, fictício), com destino `200.159.177.165:5090`.
   - todos clonados do DID modelo (id 83663, produto 83673);
-  - modelo com `bypass_media=0` e `leg_timeout=30`.
+  - modelo com `bypass_media=1` e `leg_timeout=30` (no FluxSBC, `bypass_media=1` desativa o bypass: o FS ancora o RTP).
 
 Ferramentas:
 - `flux-loadtest.sh` (`smoke`, `run`), com coleta somente leitura por SSH nos 5 servidores;
@@ -245,10 +245,11 @@ minutos, quase todas desse tipo. Isso esconde erros reais e custa disco em carga
 - **Corrigido:** `scenarios/uas-answer.xml.in` (#8).
 
 ### A9. Padrões do DID criado pela interface
-O DID modelo veio com `bypass_media=1` e `leg_timeout=0`. Com bypass, o RTP iria direto entre
-originador e atendedor (no próprio .165) e o teste não mediria mídia nos FS. Os dois foram
-ajustados no modelo (`bypass_media=0`, `leg_timeout=30`) antes da clonagem. Vale conferir esses
-padrões nos DIDs reais.
+O DID modelo veio com `leg_timeout=0`, ajustado para 30 antes da clonagem. O `bypass_media=1` do
+modelo está correto: no FluxSBC, `1` **desativa** o bypass e o FS ancora o RTP das duas pernas; com
+`0`, o RTP iria direto entre originador e atendedor (no próprio .165) e o teste não mediria mídia
+nos FS. Conferido em 03/11: os 100 mil DIDs da conta 211 com `bypass_media=1` e `leg_timeout=30`.
+Vale conferir esses padrões nos DIDs reais.
 
 ### A10. Estado do banco do STFC
 - **ACL e `load_balancer`:**

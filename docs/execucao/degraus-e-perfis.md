@@ -10,7 +10,7 @@
 | `max-sessions` recomendado por FS | 1,4 x simultâneas |
 | Sessões por segundo (`sps`) por FS | CPS x 2 x ~0,55 |
 | Limite de simultâneas do SIPp (`-l` padrão) | CPS x (hold + 4) x 1,2 |
-| Portas RTP | 2 por perna com mídia (com `bypass_media = 0`, 2 pernas por chamada) |
+| Portas RTP | 2 por perna com mídia (com `bypass_media = 1`, bypass desativado, 2 pernas por chamada) |
 
 Exemplo: 30 CPS com hold de 30 s dá ~900 simultâneas, ~1800 sessões, ~33 `sps` e ~1000 sessões no
 FS mais carregado.
@@ -86,8 +86,8 @@ equivalem às opções do `run`).
 | `stfc-cps-livre` | CPS escolhido no menu, de 10 a 300: rampa de CPS/2 a CPS em 5 degraus de 60 s, mais 180 s no alvo, hold 10 s | ~13 min | Mostrado pelo Plano |
 | `stfc-cps-por-fs` | CPS **por FS** escolhido no menu, de 10 a 150: envia valor x 2 ao OpenSIPS, com a mesma rampa do `stfc-cps-livre` (de 50 por FS: 100 no sistema) | ~13 min | Mostrado pelo Plano |
 | `stfc-cps90-30min` | Sinalização: rampa de 45 a 90 CPS (+9 a cada 60 s), 30 min em 90, hold 10 s | ~38 min | `150 1260` |
-| `stfc-cps90-rtp-escada` | RTP G.711: escada de 30 a 90 CPS (+15 a cada 120 s), 3 min em 90, hold 10 s. Exige DIDs com `bypass_media = 0` | ~14 min | `150 1260` |
-| `stfc-cps90-rtp-30min` | RTP G.711: rampa de 45 a 90 CPS, 30 min em 90, hold 10 s. Exige DIDs com `bypass_media = 0` | ~38 min | `150 1260` |
+| `stfc-cps90-rtp-escada` | RTP G.711: escada de 30 a 90 CPS (+15 a cada 120 s), 3 min em 90, hold 10 s. Exige DIDs com `bypass_media = 1` | ~14 min | `150 1260` |
+| `stfc-cps90-rtp-30min` | RTP G.711: rampa de 45 a 90 CPS, 30 min em 90, hold 10 s. Exige DIDs com `bypass_media = 1` | ~38 min | `150 1260` |
 | `stfc-cps90-2h` | Sinalização: rampa de 45 a 90 CPS, 2 h em 90, hold 10 s | ~2h08 | `150 1260` |
 | `stfc-c1000` | 1000 simultâneas a 10 CPS (janela 150 s, hold 100 s) | ~9 min | — |
 | `stfc-c1000-rtp` | Igual ao `stfc-c1000`, com `MEDIA=rtp` (G.711 nos dois sentidos) | ~9 min | — |
@@ -97,7 +97,7 @@ equivalem às opções do `run`).
 
 Durações com o baseline e o cooldown de 120 s do `loadtest.conf` do STFC. Todos com `MEDIA=none`,
 exceto o `stfc-c1000-rtp`: rodado logo depois do `stfc-c1000`, o par mostra o custo da mídia nos FS
-na mesma carga. Ele exige DIDs com `bypass_media = 0` (veja [Conta e DIDs de teste](../instalacao/massa-dids.md))
+na mesma carga. Ele exige DIDs com `bypass_media = 1`, que no FluxSBC desativa o bypass (veja [Conta e DIDs de teste](../instalacao/massa-dids.md))
 e coloca ~180 Mbit/s por sentido no gerador.
 
 Ordem recomendada: `stfc-piloto` -> `stfc-c1000` -> `stfc-c2000` -> `stfc-c3000` -> `stfc-c5000` (só depois de um

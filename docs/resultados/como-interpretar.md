@@ -244,7 +244,7 @@ antecipar o vermelho; o vermelho segue sempre o guard, o runbook ou a macro do Z
 | Qual `max-sessions` aplicar? | 1,4 x simultâneas por FS |
 | Quantas consultas por chamada? | (`db_qps` médio na fase `sip` - `db_qps` médio no `baseline`) / CPS médio da fase |
 | Quanto da CPU é mídia? | `freeswitch_cpu_pct` com `-M rtp` - com `-M none`, mesma carga |
-| Quantas portas RTP? | 2 por perna com mídia; com `bypass_media = 0`, 2 pernas por chamada |
+| Quantas portas RTP? | 2 por perna com mídia; com `bypass_media = 1` (bypass desativado no FluxSBC), 2 pernas por chamada |
 | Quanto o banco aguenta, por projeção? | Uso na fase / CPS medido, extrapolado até o limite do guard. Projeção, não medida: confirme com um degrau |
 
 ## 9. Subir ou não o próximo degrau

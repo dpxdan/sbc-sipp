@@ -138,7 +138,7 @@ timeout 600 bash -c 'while sleep 0.2; do printf "%s " "$(date +%T.%3N)"; ss -Hlu
 
 ### T2: mídia
 
-Os DIDs de teste precisam de `bypass_media = 0` e `leg_timeout` diferente de 0 ([Conta e DIDs de teste](../instalacao/massa-dids.md)),
+Os DIDs de teste precisam de `bypass_media = 1` (no FluxSBC, `1` desativa o bypass e o FS ancora o RTP) e `leg_timeout` diferente de 0 ([Conta e DIDs de teste](../instalacao/massa-dids.md)),
 e o firewall do `.165` precisa liberar as faixas RTP vindas dos FS.
 
 O teste com RTP coloca ~180 Mbit/s por sentido no gerador a cada 1000 simultâneas. Acompanhe `SIPp: thread mais
