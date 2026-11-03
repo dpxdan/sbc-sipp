@@ -277,9 +277,9 @@ cmd_start() {
         # sem terminal nao ha --fs-password: sem o arquivo, as metricas fs_* ficam vazias
         fspass=$(flt_conf_value FS_CLI_PASSWORD_FILE)
         [[ -n ${fspass} && -r ${fspass} ]] || die "${E_CONFIG}" "FS_CLI_PASSWORD_FILE vazio ou ilegivel em ${RUNNER[FLT_CONF]}"
-        # atraso e memoria do OpenSIPS atingem tambem as chamadas reais; o guard padrao nao os vigia
+        # atraso, memoria do OpenSIPS e conexoes do banco atingem tambem as chamadas reais; o guard padrao nao os vigia
         if ((P[CPS] > CPS_GUARD_FROM)); then
-            for k in GUARD_MAX_PDD_MS GUARD_MAX_OS_SHM_PCT; do
+            for k in GUARD_MAX_PDD_MS GUARD_MAX_OS_SHM_PCT GUARD_MAX_DB_CONN_PCT; do
                 [[ $(flt_conf_value "${k}") =~ ^[1-9][0-9]*$ ]] \
                     || die "${E_CONFIG}" "${k} vazio ou 0 em ${RUNNER[FLT_CONF]}: obrigatorio acima de ${CPS_GUARD_FROM} CPS"
             done

@@ -161,8 +161,8 @@ enviado ao OpenSIPS. Veja [CPS por servidor](../execucao/degraus-e-perfis.md#cps
 
 O valor define a rampa (de CPS/2 a CPS, passo CPS/10) e o rótulo do resultado
 (`zbx-stfc-cps-livre-100`). O script **Estado** mostra o CPS da execução em andamento e o da última de
-cada perfil. Acima de 50 CPS, o wrapper exige `GUARD_MAX_PDD_MS` e `GUARD_MAX_OS_SHM_PCT` no
-`loadtest.conf` ([pré-requisitos](../execucao/degraus-e-perfis.md#2-acima-de-50-cps)).
+cada perfil. Acima de 50 CPS, o wrapper exige `GUARD_MAX_PDD_MS`, `GUARD_MAX_OS_SHM_PCT` e
+`GUARD_MAX_DB_CONN_PCT` no `loadtest.conf` ([pré-requisitos](../execucao/degraus-e-perfis.md#2-acima-de-50-cps)).
 
 Depois de mudar `CPS_CHOICES`, repita o `flux-host.sh prepare zabbix-agent` (os `AllowKey`) e o
 `zabbix setup --scripts` (a lista do menu).
@@ -269,8 +269,8 @@ O token precisa de escrita nos dois FS, de permissão para dashboards e de permi
 `Templates/FluxSBC`. Um item `fluxsbc.calls.inbound` criado direto no host passa a herdar do template e deve
 manter o histórico: confira num FS depois do comando.
 
-Com `ZABBIX_CPS_HOSTS` preenchida, o `zabbix setup` também mantém o gráfico `FreeSWITCH: chamadas por
-segundo` na página Servidores do dashboard de resultados.
+Com `ZABBIX_CPS_HOSTS` preenchida, o `zabbix setup` também cria a página **CPS** no dashboard de resultados,
+com os mesmos gráficos. Páginas criadas à mão nesse dashboard são apagadas pelo `setup`.
 
 !!! note "Mudança de escala"
     A versão anterior do worker contava 2 por chamada: casava também com `Presence-Call-Direction`. O Inbound

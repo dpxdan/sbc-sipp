@@ -1247,6 +1247,24 @@ zabbix_export:
                 value: 'opensips'
               - tag: 'tipo'
                 value: 'gargalo'
+      - uuid: 0ecfa07ab38b4e25b3459c7ef1957a69
+        name: 'OpenSIPS: memoria compartilhada, maximo desde o restart'
+        type: DEPENDENT
+        key: 'flt.app[os_shm_max_pct]'
+        delay: '0'
+        history: 90d
+        value_type: FLOAT
+        units: '%'
+        preprocessing:
+          - type: JSONPATH
+            parameters:
+              - '$.os_shm_max_pct'
+            error_handler: DISCARD_VALUE
+        master_item:
+          key: 'flt.app'
+        tags:
+          - tag: 'component'
+            value: 'opensips'
       - uuid: 45195f4f307f40d7b76293a61bcdafcd
         name: 'OpenSIPS: load'
         type: DEPENDENT

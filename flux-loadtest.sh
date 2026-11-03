@@ -76,7 +76,7 @@ declare -A CFG=(
     [MYSQL_BENCH_TABLE_SIZE]="100000" [MYSQL_BENCH_THREADS]="8" [MYSQL_BENCH_EXTRA_ARGS]=""
     [GUARD_MAX_CPU_PCT]="85" [GUARD_MAX_GEN_CPU_PCT]="90" [GUARD_MAX_MEM_PCT]="90"
     [GUARD_MIN_DISK_FREE_PCT]="15" [GUARD_MAX_FAIL_PCT]="5" [GUARD_MAX_PDD_MS]="0" [GUARD_MAX_REPL_LAG]="30"
-    [GUARD_MAX_CORE_PCT]="0" [GUARD_MAX_OS_SHM_PCT]="0" [GUARD_HITS]="3"
+    [GUARD_MAX_CORE_PCT]="0" [GUARD_MAX_OS_SHM_PCT]="0" [GUARD_MAX_DB_CONN_PCT]="0" [GUARD_HITS]="3"
     [GUARD_MAX_WSREP_FC_PCT]="10" [GUARD_MIN_WSREP_CLUSTER_SIZE]="0"
     [SAMPLE_INTERVAL]="5" [BASELINE_SECONDS]="60" [COOLDOWN_SECONDS]="60"
     [CAPACITY_ALERT_PCT]="80"
@@ -120,7 +120,7 @@ validate_config() {
                VM_BYTES_PER_SECOND MYSQL_BENCH_PORT MYSQL_BENCH_TABLES MYSQL_BENCH_TABLE_SIZE \
                MYSQL_BENCH_THREADS GUARD_MAX_CPU_PCT GUARD_MAX_GEN_CPU_PCT GUARD_MAX_MEM_PCT \
                GUARD_MIN_DISK_FREE_PCT GUARD_MAX_FAIL_PCT GUARD_MAX_PDD_MS GUARD_MAX_REPL_LAG GUARD_MAX_CORE_PCT \
-               GUARD_MAX_OS_SHM_PCT GUARD_HITS GUARD_MAX_WSREP_FC_PCT GUARD_MIN_WSREP_CLUSTER_SIZE \
+               GUARD_MAX_OS_SHM_PCT GUARD_MAX_DB_CONN_PCT GUARD_HITS GUARD_MAX_WSREP_FC_PCT GUARD_MIN_WSREP_CLUSTER_SIZE \
                SAMPLE_INTERVAL BASELINE_SECONDS COOLDOWN_SECONDS ZABBIX_PORT UAS_RTP_PORT_BASE \
                CAPACITY_ALERT_PCT; do
         is_uint "${CFG[${key}]}" || die "${E_CONFIG}" "${key} deve ser inteiro: '${CFG[${key}]}'"
@@ -567,9 +567,10 @@ host_violations() {
     awk -F, -v maxcpu="${maxcpu}" -v maxmem="${CFG[GUARD_MAX_MEM_PCT]}" \
         -v mindisk="${CFG[GUARD_MIN_DISK_FREE_PCT]}" -v maxcore="${CFG[GUARD_MAX_CORE_PCT]}" \
         -v maxlag="${CFG[GUARD_MAX_REPL_LAG]}" -v maxfc="${CFG[GUARD_MAX_WSREP_FC_PCT]}" \
-        -v minsize="${CFG[GUARD_MIN_WSREP_CLUSTER_SIZE]}" -v maxshm="${CFG[GUARD_MAX_OS_SHM_PCT]}" '
+        -v minsize="${CFG[GUARD_MIN_WSREP_CLUSTER_SIZE]}" -v maxshm="${CFG[GUARD_MAX_OS_SHM_PCT]}" \
+        -v maxconn="${CFG[GUARD_MAX_DB_CONN_PCT]}" '
         NR == 1 { for (i = 1; i <= NF; i++) c[$i] = i; n = NF; next }
-        NF == n { l = $0 }
+        NF == n { l = $0; if (first == "") first = $0 }
         function g(k,   x) { x = (k in c) ? v[c[k]] : ""; return x }
         END {
             if (l == "") exit
@@ -580,6 +581,12 @@ host_violations() {
             if (g("disk_free_pct") != "" && g("disk_free_pct") + 0 < mindisk) out = out " disco_livre=" g("disk_free_pct")
             if (maxcore > 0 && g("cpu_max_core_pct") + 0 > maxcore) out = out " nucleo=" g("cpu_max_core_pct")
             if (maxshm > 0 && g("os_shm_used_pct") != "" && g("os_shm_used_pct") + 0 > maxshm) out = out " memoria_compartilhada=" g("os_shm_used_pct")
+            # A amostra perde o pico. O maximo e acumulado desde o restart do OpenSIPS: so conta se subiu nesta execucao
+            if (maxshm > 0 && g("os_shm_max_pct") != "" && g("os_shm_max_pct") + 0 > maxshm) {
+                split(first, f, ",")
+                if (g("os_shm_max_pct") + 0 > f[c["os_shm_max_pct"]] + 0) out = out " memoria_maxima=" g("os_shm_max_pct")
+            }
+            if (maxconn > 0 && g("db_conn_pct") != "" && g("db_conn_pct") + 0 > maxconn) out = out " conexoes_banco=" g("db_conn_pct")
             if (g("db_repl_lag") != "" && g("db_repl_lag") + 0 > maxlag) out = out " replicacao=" g("db_repl_lag") "s"
             if (g("db_repl_ok") == "0") out = out " replicacao_parada=1"
             # Percona XtraDB Cluster: 4 = Synced; Primary = no com quorum
@@ -803,6 +810,7 @@ capacity_collect() {
 }
 
 # Pico em segundo plano: o laco do SIPp continua vigiando os limites enquanto coleta.
+readonly CAP_PICO_LEAD_S=15
 capacity_pico_start() {
     [[ -z ${CAP_PICO_PID} ]] || return 0
     capacity_collect pico "${RUN_DIR}" &
@@ -1170,10 +1178,12 @@ run_sip_phase() {
         kill -0 "${SIPP_PID}" 2>/dev/null || break
         if ((soft_at == 0)); then
             guard_check 1
+            # A foto "pico" precisa da carga: sai antes do fim da janela
+            if (( $(now) >= t_end - CAP_PICO_LEAD_S )); then capacity_pico_start; fi
             if [[ -n ${ABORT_REASON} ]] || (( $(now) >= t_end )); then
+                capacity_pico_start
                 sipp_soft_stop
                 soft_at=$(now)
-                capacity_pico_start
                 phase_end
                 phase_begin sip_drain
                 log "SIPp: sem novas chamadas; aguardando as ativas terminarem (ate $((OPT_HOLD + 60)) s)"
@@ -1327,8 +1337,19 @@ fmt_rt_ms() {
 #   "There were more errors"               aviso do SIPp apontando para o errors.log
 #   "receive timeout ... jumping to label"  fim do hold: o cenario deixa de esperar o
 #                                           BYE do FS e envia o BYE local (caminho normal)
+# O SIPp grava entradas sem quebra de linha entre elas: separa antes de filtrar, senao uma falha
+# colada num timeout do hold some do relatorio.
 sip_real_errors() {
-    grep -v -e 'Resolving remote host' -e 'jumping to label' -e 'There were more errors' "$1" 2>/dev/null || true
+    [[ -r $1 ]] || return 0
+    awk '{ gsub(/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\t/, "\n&"); print }' "$1" 2>/dev/null \
+        | grep -v -e 'Resolving remote host' -e 'jumping to label' -e 'There were more errors' || true
+}
+
+# Maior valor de uma coluna num CSV do coletor (vazio sem o arquivo ou a coluna)
+metric_peak() {
+    [[ -s $1 ]] || return 0
+    awk -F, -v k="$2" 'NR == 1 { for (i = 1; i <= NF; i++) if ($i == k) c = i; if (!c) exit; next }
+        $c + 0 > m { m = $c + 0 } END { if (c) print m + 0 }' "$1"
 }
 
 report_sip() {
@@ -1358,6 +1379,12 @@ report_sip() {
     # todos os "receive timeout ... jumping to label" (resume com "There were more errors")
     printf '  %-36s %s\n' "Encerradas pela VM (fim do hold)" "$(grep -c LOCAL_BYE "${dir}/sip/actions.log" 2>/dev/null || true)"
     printf '  %-36s %s\n' "Pico de chamadas simultaneas" "${mc}"
+    local dlg
+    dlg=$(metric_peak "${dir}/metrics/opensips.csv" os_active_dlg)
+    if [[ -n ${dlg} ]]; then
+        printf '  %-36s %s\n' "Pico de dialogos no OpenSIPS" "${dlg}"
+        printf '  (simultaneas reais; o pico do SIPp inclui o timewait de 2 s e a fila das travadas)\n'
+    fi
     printf '  %-36s %s\n' "Pico de CPS (por periodo)" "${mr}"
     printf '  %-36s %s\n' "CPS medio da fase" "${cr}"
     printf '  %-36s %s ms\n' "INVITE -> 100 (media)" "$(fmt_rt_ms "${rt1}")"
@@ -1491,6 +1518,9 @@ report_uas() {
     printf '  %-36s %s (%s%%)\n' "Falhas" "${fail}" "${pct}"
     printf '  %-36s %s\n' "  mensagem inesperada" "${unexp}"
     printf '  %-36s %s\n' "  sem BYE no prazo (hold + 120 s)" "${tmo}"
+    if (( ${total:-0} - ${ok:-0} - ${fail:-0} > 0 )); then
+        printf '  %-36s %s\n' "Sem desfecho (encerradas pelo SIGTERM)" "$(( total - ok - fail ))"
+    fi
     printf '  %-36s %s\n' "Pico de chamadas simultaneas" "${mc}"
     printf '  %-36s %s ms\n' "Duracao media da chamada" "$(fmt_rt_ms "${cl}")"
     if [[ -s ${dir}/sip/stats.csv ]] && sent=$(sipp_last "${dir}/sip/stats.csv" TotalCallCreated); then
@@ -1500,7 +1530,7 @@ report_uas() {
     fi
     local reasons
     reasons=$(sip_real_errors "${dir}/uas/errors.log" | {
-            grep -o "Aborting call on unexpected message[^']*\|receive timeout\|Dead call [^(]*" || true
+            grep -o "Aborting call on unexpected message\|receive timeout\|Dead call" || true
         } | sort | uniq -c | sort -rn | head -10)
     if [[ -n ${reasons} ]]; then
         printf '\n  Falhas por motivo (uas/errors.log):\n'
@@ -2102,7 +2132,8 @@ print_plan() {
         "${CFG[GUARD_MAX_CORE_PCT]}" "${CFG[GUARD_HITS]}"
     printf '  limites cluster    no nao Synced, sem quorum, flow_control>%s%% (0=off), cluster_size<%s (0=off)\n' \
         "${CFG[GUARD_MAX_WSREP_FC_PCT]}" "${CFG[GUARD_MIN_WSREP_CLUSTER_SIZE]}"
-    printf '  limites opensips   memoria compartilhada>%s%% (0=off)\n' "${CFG[GUARD_MAX_OS_SHM_PCT]}"
+    printf '  limites opensips   memoria compartilhada, amostra ou maximo da execucao>%s%% (0=off)\n' "${CFG[GUARD_MAX_OS_SHM_PCT]}"
+    printf '  limites banco      conexoes>%s%% (0=off)\n' "${CFG[GUARD_MAX_DB_CONN_PCT]}"
     printf '  resultados         %s\n\n' "${RUN_DIR}"
 }
 

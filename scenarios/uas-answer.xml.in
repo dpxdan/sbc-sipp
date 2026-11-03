@@ -87,10 +87,16 @@
     ]]>
   </send>
 
+  <!-- INVITE repetido (o 200 atrasou numa travada): absorve e segue reenviando o 200 pelo retrans,
+       como um telefone faria. Abortar parava o reenvio do 200, e o FS respondia 408 ao chamador. -->
+  <recv request="INVITE" optional="true"/>
   <recv request="ACK" crlf="true"/>
 
   @RTP_ACTION@
 
+  <!-- Repeticao de INVITE ou ACK depois do ACK nao muda nada: continua esperando o BYE -->
+  <recv request="INVITE" optional="true"/>
+  <recv request="ACK" optional="true"/>
   <recv request="BYE" timeout="@BYE_TIMEOUT_MS@"/>
 
   <send>

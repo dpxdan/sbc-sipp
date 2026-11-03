@@ -20,7 +20,8 @@ compara com os limites `GUARD_*`. Quando um limite fica estourado por `GUARD_HIT
 | Disco livre | `GUARD_MIN_DISK_FREE_PCT` | 15% | 15% |
 | Falha SIP no período (mín. 10 chamadas) | `GUARD_MAX_FAIL_PCT` | 5% | 2% |
 | INVITE -> 200 médio no período (mín. 10 chamadas) | `GUARD_MAX_PDD_MS` | desligado | 2000 ms |
-| Memória compartilhada do OpenSIPS | `GUARD_MAX_OS_SHM_PCT` | desligado | 80% |
+| Memória compartilhada do OpenSIPS (amostra ou máximo da execução) | `GUARD_MAX_OS_SHM_PCT` | desligado | 80% |
+| Conexões do banco sobre `max_connections` | `GUARD_MAX_DB_CONN_PCT` | desligado | 80% |
 | Flow control do PXC | `GUARD_MAX_WSREP_FC_PCT` | 10% | 10% |
 | Tamanho mínimo do cluster | `GUARD_MIN_WSREP_CLUSTER_SIZE` | desligado | 2 |
 | Núcleo mais carregado | `GUARD_MAX_CORE_PCT` | desligado | desligado |
