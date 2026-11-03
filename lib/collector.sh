@@ -140,7 +140,7 @@ read_net() {
     read -r NET_RB NET_RP NET_TB NET_TP NET_RD NET_TD < <(awk 'NR > 2 {
             sub(/:/, " ")
             if ($1 != "lo") { rb += $2; rp += $3; tb += $10; tp += $11; rd += $5; td += $13 }
-        } END { printf "%d %d %d %d %d %d\n", rb, rp, tb, tp, rd, td }' /proc/net/dev)
+        } END { printf "%.0f %.0f %.0f %.0f %.0f %.0f\n", rb, rp, tb, tp, rd, td }' /proc/net/dev)
 }
 
 UDP_ERR=0 UDP_RCVBUF=0
@@ -151,7 +151,7 @@ read_udp() {
                 if (k[i] == "InErrors") e = $i
                 if (k[i] == "RcvbufErrors") r = $i
             }
-        } END { printf "%d %d\n", e, r }' /proc/net/snmp)
+        } END { printf "%.0f %.0f\n", e, r }' /proc/net/snmp)
 }
 
 # ---------------------------------------------------------------- disco
@@ -314,7 +314,7 @@ app_header() {
     case "${ROLE}" in
         fs)       printf ',fs_calls,fs_sessions,fs_sps,fs_idle_cpu,fs_api_ms,fs_db_probe_ms,fs_max_sessions,fs_sessions_pct'
                   printf ',fs_db_handles,fs_db_handles_used,fs_db_handles_pct' ;;
-        opensips) printf ',os_active_dlg,os_early_dlg,os_tm_inuse,os_rcv_req_s,os_failed_dlg_total,os_drop_req_total,os_shm_used_pct,os_load,os_lb_max_pct' ;;
+        opensips) printf ',os_active_dlg,os_early_dlg,os_tm_inuse,os_rcv_req_s,os_failed_dlg_total,os_drop_req_total,os_shm_used_pct,os_load,os_lb_max_pct,os_shm_max_pct' ;;
         db)       printf ',db_qps,db_select_s,db_insert_s,db_update_s,db_threads_running,db_threads_connected,db_slow_total,db_row_lock_waits_total,db_repl_lag,db_repl_ok'
                   printf ',db_wsrep_recv_queue,db_wsrep_send_queue,db_wsrep_fc_paused_pct,db_wsrep_cluster_size,db_wsrep_state,db_wsrep_primary,db_vip'
                   printf ',db_stmt_avg_ms,db_conn_pct' ;;
@@ -368,7 +368,7 @@ app_sample() {
             "${db_ms}" "${maxs}" "${spct}" "${htot}" "${hused}" "${hpct}"
         ;;
     opensips)
-        local act early tmu rcv failed drop shu sht shp="" load
+        local act early tmu rcv failed drop shu sht shp="" shm shmp="" load
         out=$(run_app get_statistics dialog: tm: core: shmem: load:)
         act=$(json_num "${out}" 'dialog:active_dialogs')
         early=$(json_num "${out}" 'dialog:early_dialogs')
@@ -378,9 +378,13 @@ app_sample() {
         drop=$(json_num "${out}" 'core:drop_requests')
         shu=$(json_num "${out}" 'shmem:real_used_size')
         sht=$(json_num "${out}" 'shmem:total_size')
+        shm=$(json_num "${out}" 'shmem:max_used_size')
         load=$(json_num "${out}" 'load:load')
         if [[ -n ${shu} && -n ${sht} ]] && ((sht > 0)); then
             shp=$(fmt1 $((shu * 1000 / sht)))
+        fi
+        if [[ -n ${shm} && -n ${sht} ]] && ((sht > 0)); then
+            shmp=$(fmt1 $((shm * 1000 / sht)))
         fi
         counter_rate rcv "${rcv}"
         # load_balancer: destino mais cheio (load / max). Perto de 100 o OpenSIPS responde
@@ -397,8 +401,8 @@ p = [r["load"] * 100.0 / r["max"] for x in d.get("Destinations", []) for r in x.
      if isinstance(r.get("max"), int) and isinstance(r.get("load"), int) and r["max"] > 0 and r["load"] > 0]
 print("%.1f" % max(p) if p else "0.0")' 2>/dev/null)
         fi
-        printf -v APP_LINE ',%s,%s,%s,%s,%s,%s,%s,%s,%s' "${act}" "${early}" "${tmu}" \
-            "${CR}" "${failed}" "${drop}" "${shp}" "${load}" "${lbp}"
+        printf -v APP_LINE ',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s' "${act}" "${early}" "${tmu}" \
+            "${CR}" "${failed}" "${drop}" "${shp}" "${load}" "${lbp}" "${shmp}"
         ;;
     db)
         local q sel ins upd thr thc slow rlw lag="" ok="" wq wsq wfc="" wcs wls wpri="" vip=""

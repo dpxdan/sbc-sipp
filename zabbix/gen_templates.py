@@ -130,6 +130,7 @@ OS_ITEMS = proc_items("opensips", "OpenSIPS") + [
     it("os_failed_dlg_total", "OpenSIPS: dialogos com falha (acumulado)", "", None, "U"),
     it("os_drop_req_total", "OpenSIPS: requisicoes descartadas (acumulado)", "", None, "U"),
     it("os_shm_used_pct", "OpenSIPS: memoria compartilhada usada", "%"),
+    it("os_shm_max_pct", "OpenSIPS: memoria compartilhada, maximo desde o restart", "%"),
     it("os_load", "OpenSIPS: load", "%"),
     it("os_lb_max_pct", "OpenSIPS: destino do load_balancer mais cheio", "%",
        desc="Maior load/max entre os destinos do lb_list. Perto de 100 = 503 No FreeSWITCH Available."),

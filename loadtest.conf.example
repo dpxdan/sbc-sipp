@@ -159,6 +159,9 @@ GUARD_MAX_PDD_MS=0
 # Memoria compartilhada do OpenSIPS em uso (%). O esgotamento derruba tambem as chamadas reais.
 # 0 = desligado. O disparo pelo Zabbix exige este limite e o GUARD_MAX_PDD_MS acima de 50 CPS.
 GUARD_MAX_OS_SHM_PCT=0
+# Conexoes do banco / max_connections (%). No limite, clientes recebem "Too many connections".
+# 0 = desligado. O disparo pelo Zabbix tambem exige este limite acima de 50 CPS.
+GUARD_MAX_DB_CONN_PCT=0
 # Replicacao assincrona (nao se aplica ao Percona XtraDB Cluster)
 GUARD_MAX_REPL_LAG=30
 # Percona XtraDB Cluster: no fora de Synced ou sem quorum (Primary) sempre interrompem.

@@ -85,6 +85,10 @@ equivalem às opções do `run`).
 | `stfc-cps-escada300` | Escada de 150 a 300 CPS (+30 a cada 60 s), mais 180 s em 300, hold 10 s (~3000 simultâneas) | ~13 min | `350 4200` |
 | `stfc-cps-livre` | CPS escolhido no menu, de 10 a 300: rampa de CPS/2 a CPS em 5 degraus de 60 s, mais 180 s no alvo, hold 10 s | ~13 min | Mostrado pelo Plano |
 | `stfc-cps-por-fs` | CPS **por FS** escolhido no menu, de 10 a 150: envia valor x 2 ao OpenSIPS, com a mesma rampa do `stfc-cps-livre` (de 50 por FS: 100 no sistema) | ~13 min | Mostrado pelo Plano |
+| `stfc-cps90-30min` | Sinalização: rampa de 45 a 90 CPS (+9 a cada 60 s), 30 min em 90, hold 10 s | ~38 min | `150 1260` |
+| `stfc-cps90-rtp-escada` | RTP G.711: escada de 30 a 90 CPS (+15 a cada 120 s), 3 min em 90, hold 10 s. Exige DIDs com `bypass_media = 0` | ~14 min | `150 1260` |
+| `stfc-cps90-rtp-30min` | RTP G.711: rampa de 45 a 90 CPS, 30 min em 90, hold 10 s. Exige DIDs com `bypass_media = 0` | ~38 min | `150 1260` |
+| `stfc-cps90-2h` | Sinalização: rampa de 45 a 90 CPS, 2 h em 90, hold 10 s | ~2h08 | `150 1260` |
 | `stfc-c1000` | 1000 simultâneas a 10 CPS (janela 150 s, hold 100 s) | ~9 min | — |
 | `stfc-c1000-rtp` | Igual ao `stfc-c1000`, com `MEDIA=rtp` (G.711 nos dois sentidos) | ~9 min | — |
 | `stfc-c2000` | 2000 simultâneas a 10 CPS (janela 320 s, hold 200 s, 120 s no patamar, `-l` 2448) | ~13 min | `150 2800` |
@@ -175,7 +179,7 @@ simultâneas = CPS x 10: as combinações 100/1000, 200/2000 e 300/3000 da issue
 | Pré-requisito | Por quê |
 |---|---|
 | `ZBX_MAX_CPS=300` no `/etc/flux-loadtest/zabbix-runner.conf` | Com o teto padrão (50), o wrapper recusa os perfis e eles ficam fora do include do agent. O arquivo do STFC é `deploy/stfc-completo/zabbix-runner.conf` |
-| `GUARD_MAX_PDD_MS` e `GUARD_MAX_OS_SHM_PCT` no `loadtest.conf` | Acima de 50 CPS, o wrapper recusa o disparo com um deles vazio ou em 0. Atraso e memória esgotada do OpenSIPS atingem também as chamadas reais |
+| `GUARD_MAX_PDD_MS`, `GUARD_MAX_OS_SHM_PCT` e `GUARD_MAX_DB_CONN_PCT` no `loadtest.conf` | Acima de 50 CPS, o wrapper recusa o disparo com um deles vazio ou em 0. Atraso, memória esgotada do OpenSIPS e banco sem conexões atingem também as chamadas reais |
 | `fs-limites.sh aplicar` nos dois FS | O valor de cada perfil está na tabela de perfis; o Plano mostra o do CPS escolhido |
 | `-m` do OpenSIPS maior, acima de ~100 CPS | Em 28/10/2026, a memória compartilhada chegou a 40% de 64 MB a 50 CPS: esgota por volta de 130-150 CPS. Exige restart, em janela própria. Sem isso, o guard para o teste em 80% |
 | CPU dos FS | ~10% de um núcleo por CPS em cada nó: teto projetado de 130-160 CPS. Acima disso, o `GUARD_MAX_CPU_PCT` para o teste. Para 300 CPS, é preciso reduzir a CPU por chamada ou aumentar FS/vCPU |

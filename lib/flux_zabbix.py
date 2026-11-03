@@ -856,15 +856,26 @@ def dashboard_pages(p, gid, result_items, cps_hosts=()):
                  [([p + "db*"], ["MySQL: consultas"], "A54F10", 0), ([p + "db*"], ["MySQL: CPU*"], "6C59DC", 1)]),
         svggraph("Pacotes recebidos por servidor", half, 10, [([p + "*"], ["Pacotes recebidos"], "AC8C14", 0)]),
     ]
+    pages = [{"name": "Resultados", "widgets": resultado}, {"name": "Gargalos", "widgets": gargalos}]
     if cps_hosts:
-        servidores.append(svggraph("FreeSWITCH: chamadas por segundo", 0, 15, cps_datasets(cps_hosts, "FluxSBC - Inbound CPS")))
-    return [{"name": "Resultados", "widgets": resultado}, {"name": "Gargalos", "widgets": gargalos},
-            {"name": "Servidores", "widgets": servidores}]
+        pages.append({"name": "CPS", "widgets": cps_widgets(cps_hosts)})
+    return pages + [{"name": "Servidores", "widgets": servidores}]
 
 
-def cps_datasets(hosts, item, stacked=False):
+def cps_datasets(hosts, item):
     """Uma serie por FS: cada no com a propria cor no grafico."""
-    return [([h], [item], GRAPH_COLORS[i % len(GRAPH_COLORS)], 0, stacked) for i, h in enumerate(hosts)]
+    return [([h], [item], GRAPH_COLORS[i % len(GRAPH_COLORS)], 0) for i, h in enumerate(hosts)]
+
+
+def cps_widgets(hosts):
+    """Graficos de CPS dos FS. O empilhado usa um unico dataset: o Zabbix so soma series do mesmo dataset."""
+    half, inb, outb = DASH_COLS // 2, "FluxSBC - Inbound CPS", "FluxSBC - Outbound CPS"
+    return [
+        svggraph("Inbound CPS por FS", 0, 0, cps_datasets(hosts, inb)),
+        svggraph("Inbound CPS total (empilhado)", half, 0, [(hosts, [inb], GRAPH_COLORS[0], 0, True)]),
+        svggraph("Entrada x saida por segundo", 0, 5, [(hosts, [inb], GRAPH_COLORS[0], 0), (hosts, [outb], GRAPH_COLORS[1], 0)]),
+        svggraph("SPS por FS", half, 5, cps_datasets(hosts, "FluxSBC - SPS")),
+    ]
 
 
 def cps_find_hosts(api, names):
@@ -999,14 +1010,7 @@ def cps_check_items(api, hosts):
 
 def cps_dashboard_spec(hosts):
     """Dashboard global: o de template mostra um host por vez, e este junta os FS."""
-    half, inb, outb = DASH_COLS // 2, "FluxSBC - Inbound CPS", "FluxSBC - Outbound CPS"
-    widgets = [
-        svggraph("Inbound CPS por FS", 0, 0, cps_datasets(hosts, inb)),
-        svggraph("Inbound CPS total (empilhado)", half, 0, cps_datasets(hosts, inb, stacked=True)),
-        svggraph("Entrada x saida por segundo", 0, 5, [(hosts, [inb], GRAPH_COLORS[0], 0), (hosts, [outb], GRAPH_COLORS[1], 0)]),
-        svggraph("SPS por FS", half, 5, cps_datasets(hosts, "FluxSBC - SPS")),
-    ]
-    return {"name": CPS_DASHBOARD, "display_period": 60, "auto_start": 0, "pages": [{"name": "CPS", "widgets": widgets}]}
+    return {"name": CPS_DASHBOARD, "display_period": 60, "auto_start": 0, "pages": [{"name": "CPS", "widgets": cps_widgets(hosts)}]}
 
 
 def cmd_cps_setup(a):
