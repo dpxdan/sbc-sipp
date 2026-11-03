@@ -90,8 +90,25 @@ O `Connection_errors_max_connections` estava em 4 em 31/10 e não deve subir.
 ### Travadas do OpenSIPS
 
 No T1, a fila do socket 5060 parou de ser lida por 1,3 a 2,2 s em ciclo fixo de 150 s (56,5 + 56,5 + 37 s), sem
-falhas, mas com ~1% das chamadas entre 1 e 2 s até o 200. Para achar a causa, rode `stfc-cps-livre` a 90 CPS
-(~9 min) com, no `.163`:
+falhas, mas com ~1% das chamadas entre 1 e 2 s até o 200.
+
+**Causa (03/11):** log. Com `xlog_level=3`, os `xlog("L_NOTICE", ...)` das rotas geravam ~3.000 linhas/s a 90 CPS
+(~33 por chamada). O journald descartava ~65 mil a cada 30 s pelo limite de taxa e não acompanhava, e os 8 workers da
+5060 ficavam bloqueados no envio ao socket de log (`sock_alloc_send_pskb`). **Correção:** `xlog_level=1`, aplicado
+sem restart com `opensips-cli -x mi xlog_level 1` e gravado no `opensips.cfg`. Para depurar uma chamada, suba para 3
+pelo MI e volte para 1.
+
+| `stfc-cps-livre` a 90 CPS | `xlog_level=3` | `xlog_level=1` |
+|---|---|---|
+| Falhas | 0 | 0 |
+| INVITE -> 100 / -> 200 (média) | 10 / 126 ms | 1 / 101 ms |
+| Pior período de 5 s | 593 ms | 110 ms |
+| Chamadas com 500 ms ou mais até o 200 | 2,22% | 0 |
+| Retransmissões de INVITE | 677 | 0 |
+| Fila máxima do socket 5060 | 1,4 MB | 10 KB |
+| Escrita em disco no `.163` (média) | 3,5 MB/s | 0,12 MB/s |
+
+Para repetir o diagnóstico, rode `stfc-cps-livre` a 90 CPS (~9 min) com, no `.163`:
 
 ```bash
 bash /root/diag-travadas.sh 600
@@ -160,8 +177,8 @@ Siga [Encerramento e reversão](encerramento.md), mais estes pontos:
 
 - **Senha do event socket:** trocar, atualizando `/etc/flux-loadtest/fs_cli.pass` no `.165` e nos FS, `/root/.fs_cli_conf`
   e o que o OpenSIPS usar. Reinicie o `fluxsbc-cps` em cada FS.
-- **Persistência:** conferir depois de um restart `S_MEMORY=256`, `maxbuffer`, `net.core.rmem_max`,
-  `max_connections` nos dois nós do PXC e os limites do `switch.conf`.
+- **Persistência:** conferir depois de um restart `S_MEMORY=256`, `maxbuffer`, `net.core.rmem_max`, `xlog_level=1`
+  no `opensips.cfg`, `max_connections` nos dois nós do PXC e os limites do `switch.conf`.
 - **Limites:** rodar `fs-limites.sh restaurar` nos dois FS.
 - **Zabbix:** revogar os tokens de teste, desvincular os templates `Flux Loadtest` dos hosts reais e definir os alertas
   reais dos FS. O template de CPS não tem gatilhos, e as ações de notificação não têm condição.
