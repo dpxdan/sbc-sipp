@@ -87,6 +87,38 @@ mysql -e "SHOW GLOBAL STATUS WHERE Variable_name IN ('Max_used_connections','Max
 
 O `Connection_errors_max_connections` estava em 4 em 31/10 e não deve subir.
 
+### Travadas do OpenSIPS
+
+No T1, a fila do socket 5060 parou de ser lida por 1,3 a 2,2 s em ciclo fixo de 150 s (56,5 + 56,5 + 37 s), sem
+falhas, mas com ~1% das chamadas entre 1 e 2 s até o 200. Para achar a causa, rode `stfc-cps-livre` a 90 CPS
+(~9 min) com, no `.163`:
+
+```bash
+bash /root/diag-travadas.sh 600
+```
+
+O script (`deploy/stfc-completo/diag-travadas.sh`, só leitura) grava em `/root/diag-travadas-<data>/` o `wchan`
+de cada processo do OpenSIPS no momento da travada, as threads mais carregadas, a fila da 5070 do FS e, a cada
+1 s, o tempo de resposta do MI e o `max` do `load_balancer`. Leitura do `wchan` dos workers SIP na travada:
+
+| `wchan` | Indica |
+|---|---|
+| `futex_wait_queue` | Lock interno do OpenSIPS, mantido por outro processo (timer, MI, `load_balancer`) |
+| `sk_wait_data`, `wait_woken`, `unix_stream_*` | Espera de rede: banco ou event socket do FS |
+| `R` com CPU alta | Falta de CPU no `.163` |
+
+No `.161`, em paralelo, as consultas de 1 s ou mais:
+
+```bash
+timeout 600 bash -c 'while sleep 0.5; do mysql -N -e "SELECT NOW(3), id, user, SUBSTRING_INDEX(host,\":\",1), command, time, state, LEFT(info,200) FROM information_schema.processlist WHERE command <> \"Sleep\" AND time >= 1 AND user NOT IN (\"system user\",\"event_scheduler\");"; done' > /root/lentas-db1.log
+```
+
+No `.162`, a fila da 5070, para saber se o outro FS para junto:
+
+```bash
+timeout 600 bash -c 'while sleep 0.2; do printf "%s " "$(date +%T.%3N)"; ss -Hlunm "src 200.159.177.162:5070" | grep -o "skmem:(r[0-9]*"; done' > /root/fila-5070-162.log
+```
+
 ### T2: mídia
 
 Os DIDs de teste precisam de `bypass_media = 0` e `leg_timeout` diferente de 0 ([Conta e DIDs de teste](../instalacao/massa-dids.md)),
