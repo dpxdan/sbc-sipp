@@ -129,8 +129,8 @@ opensips-cli -x mi get_statistics shmem:
 
 - Compare um degrau com `-M none` e o mesmo com `-M rtp`: a diferença de `freeswitch_cpu_pct` e
   `net_*_pps` é o custo de mídia.
-- Com `bypass_media = 0`, o FS ancora o RTP das duas pernas; com `1`, o RTP passa direto e o FS só
-  sinaliza.
+- Com `bypass_media = 1` (no FluxSBC, bypass desativado), o FS ancora o RTP das duas pernas; com `0`,
+  o RTP passa direto e o FS só sinaliza.
 
 ---
 

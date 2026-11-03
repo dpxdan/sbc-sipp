@@ -207,7 +207,7 @@ Perfis do STFC (deste diretório):
 | `stfc-cps-livre` | CPS escolhido no menu, de 10 a 300 (scripts `Iniciar stfc-cps-livre (CPS)` e `Plano stfc-cps-livre (CPS)`); o Plano mostra os limites do valor |
 | `stfc-cps-por-fs` | CPS **por FS** escolhido no menu, de 10 a 150 (scripts `Iniciar stfc-cps-por-fs (CPS)` e `Plano stfc-cps-por-fs (CPS)`); envia valor x 2 ao OpenSIPS, e o Plano mostra o total e os limites |
 | `stfc-c1000` | 1000 simultâneas a 10 CPS |
-| `stfc-c1000-rtp` | Igual ao `stfc-c1000`, com RTP G.711 nos dois sentidos (A/B de mídia); exige DIDs com `bypass_media = 0` |
+| `stfc-c1000-rtp` | Igual ao `stfc-c1000`, com RTP G.711 nos dois sentidos (A/B de mídia); exige DIDs com `bypass_media = 1` (bypass desativado no FluxSBC) |
 | `stfc-c2000` | 2000 simultâneas a 10 CPS (hold de 200 s); exige limites maiores nos FS |
 | `stfc-c3000` | 3000 simultâneas a 10 CPS (hold de 300 s); exige limites maiores nos FS |
 | `stfc-c5000` | 5000 simultâneas a 10 CPS (hold de 500 s); exige limites maiores nos FS |
@@ -298,7 +298,7 @@ Os perfis já registram a mesma foto antes, no pico e depois de cada execução
 |---|---|---|
 | Memória | `free -g` | 2,2 GB no FS com 2000 sessões (A14): projeta ~6 GB com 5500 |
 | Threads | `systemctl show freeswitch -p TasksMax,LimitNPROC` e `sysctl kernel.threads-max` | ~1 thread por sessão: 2024 threads com 2000 sessões (A14) |
-| Portas RTP | `grep -E 'rtp-(start\|end)-port' /etc/freeswitch/autoload_configs/switch.conf.xml` | sem os parâmetros, vale o padrão 16384-32768 (~8 mil sessões RTP, 2 portas cada). `bypass_media=0`: 2 legs com RTP por chamada, ~5000 por FS no `stfc-c5000` mais o tráfego real |
+| Portas RTP | `grep -E 'rtp-(start\|end)-port' /etc/freeswitch/autoload_configs/switch.conf.xml` | sem os parâmetros, vale o padrão 16384-32768 (~8 mil sessões RTP, 2 portas cada). `bypass_media=1` (bypass desativado): 2 legs com RTP por chamada, ~5000 por FS no `stfc-c5000` mais o tráfego real |
 | Timeout de mídia | `grep -rE 'rtp-timeout-sec\|media_timeout' /etc/freeswitch` | com `MEDIA=none` não há RTP: um timeout menor que o hold (500 s) derruba as chamadas |
 | Memória do OpenSIPS | `opensips-cli -x mi get_statistics shmem:` | 21,7% com 1962 diálogos (A14) |
 

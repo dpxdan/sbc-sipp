@@ -28,15 +28,15 @@ Por que não a caixa postal (validado no laboratório em 14/10/2026):
 - conta de teste **sem tarifa** (cada chamada gera CDR e passa pelo billing), com `maxchannels` e
   crédito que não limitem o teste;
 - faixa de numeração fictícia, que nenhuma operadora encaminhe;
-- `bypass_media = 0`, para o FS ancorar o RTP (com `1`, o teste não mede mídia nos FS);
+- `bypass_media = 1`: no FluxSBC, `1` **desativa** o bypass e o FS ancora o RTP (com `0`, o RTP passa direto e o teste não mede mídia nos FS);
 - `leg_timeout` diferente de 0.
 
 Use pelo menos tantos DIDs quanto chamadas simultâneas.
 
 !!! note "Padrões do DID criado pela interface"
-    Na campanha, o DID modelo criado pela interface veio com `bypass_media = 1` e
-    `leg_timeout = 0`. Os dois foram ajustados (`0` e `30`) antes da clonagem. Confira esses campos
-    no modelo.
+    Na campanha, o DID modelo criado pela interface veio com `bypass_media = 1` (correto: bypass
+    desativado) e `leg_timeout = 0`, ajustado para `30` antes da clonagem. Confira esses campos no
+    modelo.
 
 ## Procedimento no STFC
 
