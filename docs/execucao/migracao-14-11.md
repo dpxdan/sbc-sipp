@@ -144,6 +144,48 @@ e o firewall do `.165` precisa liberar as faixas RTP vindas dos FS.
 O teste com RTP coloca ~180 Mbit/s por sentido no gerador a cada 1000 simultâneas. Acompanhe `SIPp: thread mais
 carregada`: perto de 100%, o gerador passa a limitar, e o número deixa de medir os servidores.
 
+### Resultado do T2 (03/11, `stfc-cps90-rtp-30min`)
+
+Execução `20261103-030628-zbx-stfc-cps90-rtp-30min`: rampa de 45 a 90 CPS das 03:07:36 às 03:12:36 e patamar
+de 30 min em 90 CPS, com RTP nas duas pernas e `xlog_level=1`. Limites dos FS em `sps=300` e
+`max_sessions=5000` (os do `switch.conf`).
+
+| Medida | Limite | Medido | Situação |
+|---|---|---|---|
+| Falhas no chamador | Até 0,1% | 0 de 180.902 (atendedor: 0 de 180.902) | Ok |
+| INVITE -> 200 médio | Abaixo de 200 ms | 110 ms (INVITE -> 100: 3 ms) | Ok |
+| Pior período de 5 s | Abaixo de 1 s | 178 ms (03:32:27) | Ok |
+| CPU de pico em cada nó | Abaixo de 85% | **.163: 88,1%** (média 68%, núcleo mais carregado 93%); .162: 77,9%; .161: 45,3% | **Fora** |
+| Conexões do banco | Abaixo de 80% | 9% (45 de 500) | Ok |
+| Memória do OpenSIPS, máximo real | Abaixo de 80% | 17,4% (`shm_max` 23,2%, sem crescer) | Ok |
+| Descartes UDP | 0 | 0 nos servidores (ver gerador abaixo) | Ok |
+| Duração | 30 min sem degradar | CPS de 89,6 a 90,2 em todos os períodos do patamar | Ok |
+
+Distribuição e ocupação no patamar:
+
+- **Chamadas:** ~920 simultâneas (pico 1108 no SIPp, com o timewait); 917 diálogos no OpenSIPS. O `.162` recebeu
+  ~55% (pico de 586 chamadas e 1151 sessões) e o `.163`, ~45% (466 e 928).
+- **FreeSWITCH:** ~4 núcleos de CPU em cada FS (`freeswitch_cpu_pct` médio de 408 no `.163` e 416 no `.162`). A
+  mídia é a maior parte da CPU: o OpenSIPS usou ~21% de um núcleo.
+- **Limites dos FS:** sessões em até 23% de `max_sessions`, portas RTP em até 6%, handles do banco em até 26%.
+- **Banco:** ~6.500 consultas/s no `.161` (`mysqld` em ~1,5 núcleo, pico de 3,3), latência média de 0,2 ms, PXC
+  `Synced`, sem flow control.
+
+**Gargalo: CPU do `.163` (OpenSIPS e fs1 no mesmo servidor).** O guard registrou CPU acima de 85% no fs1 às
+03:15:45 e entre 03:32:51 e 03:33:47. As 221 retransmissões do SIPp ficaram nesses mesmos minutos: 38 às 03:16 e
+112 entre 03:30 e 03:34, contra 0 a 8 por minuto no resto. O atraso não chegou ao chamador (pior período de
+178 ms), mas a folga é pequena. Com a mídia, 90 CPS fica no limite de CPU do `.163` (achado A4).
+
+**Disco do `.162`:** o uso subiu ~5 GB durante o teste (de 16 GB para 21 GB, ~2,2 MB/s de escrita), o que dá
+~50 KB por chamada. No `.163`, o disco não mudou. É preciso descobrir o que foi gravado antes do T4 (2 h), por
+exemplo com `find / -xdev -type f -newermt '2026-11-03 03:07' -size +10M -exec ls -lh {} +` no `.162`.
+
+**Descartes no gerador:** o `.165` contou ~85 mil `udp_rcvbuf_errors` por segundo, praticamente todo o RTP
+recebido. O `rtp_stream` do SIPp só envia e não lê os pacotes que chegam, então isso não é perda nos servidores.
+O volume recebido (~86 mil pps, quase 2 pernas x 920 chamadas x 50 pps) confirma que os FS ancoraram e
+encaminharam o RTP das duas pernas. O gerador não mede a qualidade da mídia: perda e jitter dependem de captura
+nos FS.
+
 ### T3: queda de um FS
 
 Dispare `stfc-cps-livre` com 40 CPS e, com a carga no patamar, pare um nó. Sem tráfego real, o impacto é só no
