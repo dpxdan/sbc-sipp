@@ -35,6 +35,8 @@ Arquivos deste diretório:
 | `preflight-sbc.sh` | .163 e .162 (somente leitura) |
 | `fs-limites.sh` | .163 e .162: limites do FreeSWITCH em runtime (`mostrar`, `aplicar`, `restaurar`) |
 | `diag-fs-gargalo.sh` | .165 (somente leitura): diagnóstico do teto de CPS por FS em todos os FS e bancos, com resultado em Markdown (`docs/execucao/gargalo-fs.md`) |
+| `diag-travadas.sh` | .163 (somente leitura): fila do socket 5060, `lb_list` e estado dos processos do OpenSIPS durante as travadas, até 3 h |
+| `coleta-longa.sh` | .163, .162, .161 e .164 (somente leitura): coleta por minuto para testes longos (memória por processo, shm e pkg do OpenSIPS, limites do FS, contadores do banco, arquivos que cresceram) e pacote `.tar.gz` para análise |
 | `sql/00-verificacao.sql` | Banco, nó 1 (somente leitura) |
 | `sql/10-opensips-address-add.sql`, `sql/90-opensips-address-remove.sql` | Banco: libera ou remove o .165 como operadora |
 | `sql/20-dids-create.sql`, `sql/95-dids-remove.sql` | Banco: massa de DIDs de teste |

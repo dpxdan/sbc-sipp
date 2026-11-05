@@ -29,7 +29,7 @@ IP=${3:-200.159.177.163}
 
 die() { printf 'ERRO: %s\n' "$*" >&2; exit 1; }
 
-[[ $DUR =~ ^[0-9]+$ ]] && ((DUR > 0 && DUR <= 7200)) || die "informe a duracao em segundos (1 a 7200)"
+[[ $DUR =~ ^[0-9]+$ ]] && ((DUR > 0 && DUR <= 10800)) || die "informe a duracao em segundos (1 a 10800)"
 [[ $LIM =~ ^[0-9]+$ ]] || die "limiar deve ser inteiro (bytes)"
 [[ $IP =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "ip invalido: ${IP}"
 ((EUID == 0)) || die "rode como root"
