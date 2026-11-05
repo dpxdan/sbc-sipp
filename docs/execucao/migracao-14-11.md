@@ -61,7 +61,7 @@ Antes de cada um, nos dois FS: `fs-limites.sh aplicar 150 1260`. Rode em um test
 |---|---|---|
 | T1 | `stfc-cps90-30min` | 90 CPS sustentado e causa das travadas |
 | T2 | `stfc-cps90-rtp-escada`, depois `stfc-cps90-rtp-30min` se chegar a 90 | Limite com RTP em todas as chamadas, o pior caso |
-| T3 | `stfc-cps-livre` a 40 CPS, parando o FreeSWITCH de um nó | Comportamento do `load_balancer` e capacidade com um nó |
+| T3 | `stfc-cps-livre` a 40 CPS, parando e religando o FreeSWITCH do `.162` no patamar | Comportamento do `load_balancer` e capacidade com um nó |
 | T4 | `stfc-cps90-2h`, com a configuração final | Vazamento de memória e degradação |
 | T5 (opcional) | `stfc-opensips-teto` | Teto do OpenSIPS com INVITE a 90 CPS |
 
@@ -189,24 +189,110 @@ nos FS.
 
 ### T3: queda de um FS
 
-Dispare `stfc-cps-livre` com 40 CPS e, com a carga no patamar, pare um nó. Sem tráfego real, o impacto é só no
-teste. O guard de falhas pode parar a execução, e isso também é resultado:
+Pare o FreeSWITCH do `.162` com `stfc-cps-livre` a 40 CPS no patamar e religue-o antes do fim. Toda a carga cai no
+`.163`, que também roda o OpenSIPS: é o pior caso de CPU. O teste responde:
+
+- quanto tempo o `load_balancer` leva para tirar o nó;
+- o que acontece com as chamadas em curso e com as que chegam durante a detecção;
+- se um nó sozinho aguenta 40 CPS;
+- como a carga volta a se dividir quando o nó retorna.
+
+Linha do tempo do perfil a 40 CPS (fases da execução de 03/11):
+
+| t (s) | Fase |
+|---|---|
+| 0-60 | baseline |
+| 60-360 | rampa de 20 a 40 CPS |
+| 360-540 | patamar de 40 CPS |
+| 390 | parar o FS do `.162` |
+| 480 | religar o FS do `.162` |
+
+São 90 s com um nó e 60 s para medir o retorno, ainda no patamar.
+
+#### Antes de disparar
+
+Nos dois FS, aplique os limites (confira os valores no "Plano stfc-cps-livre (CPS)" com 40):
 
 ```bash
-systemctl stop freeswitch
+bash fs-limites.sh aplicar 150 1260
 ```
 
-No `.163`, acompanhe o tempo até o `load_balancer` tirar o nó:
+No `.162`, confirme que não há chamadas além das do teste. Parar o FreeSWITCH derruba todas as chamadas do nó:
 
 ```bash
-opensips-cli -x mi lb_list | grep -E '"(uri|max|load|enabled)"'
+fs_cli -x 'show channels count'
 ```
 
-Depois do teste, religue o nó:
+No `.163`, confira os timers e o probing em produção. No cfg do lab: `fr_timeout 5`, `probing_interval 10` e
+`lb_disable_dst()` no 408:
 
 ```bash
-systemctl start freeswitch && sleep 10 && fs_cli -x status | head -n 3
+grep -nE 'fr_timeout|fr_inv_timeout|probing_interval|probing_method|lb_disable_dst' /etc/opensips/opensips.cfg
 ```
+
+No `.163`, deixe a captura do `lb_list` rodando, uma linha por segundo:
+
+```bash
+while sleep 1; do printf '%s ' "$(date +%T)"; opensips-cli -x mi lb_list | grep -E '"(uri|enabled|load)"' | tr -d ' \n'; echo; done | tee /tmp/t3-lb.log
+```
+
+#### Disparo
+
+No Zabbix, dispare "Iniciar stfc-cps-livre (CPS)" com 40. No mesmo instante, no `.162`:
+
+```bash
+sudo bash -c 'sleep 390; date "+%F %T parando"; systemctl stop freeswitch; date "+%F %T parado"; sleep 90; date "+%F %T iniciando"; systemctl start freeswitch; sleep 10; date "+%F %T ativo"; fs_cli -x status | head -n 3' 2>&1 | tee /tmp/t3-fs2.log
+```
+
+Quando aparecer "ativo", reaplique os limites no `.162`. `fsctl sps` e `fsctl max_sessions` não sobrevivem ao
+restart: o nó volta com os valores do `switch.conf`.
+
+```bash
+bash fs-limites.sh aplicar 150 1260
+```
+
+#### Depois do teste
+
+Nos dois FS:
+
+```bash
+bash fs-limites.sh restaurar
+```
+
+No `.163`, pare o laço com Ctrl+C e separe os eventos de failover (rotas com os nomes do cfg do lab; ajuste se o de
+produção for diferente):
+
+```bash
+journalctl -u opensips --since "-30 min" | grep -E 'FS_FAILOVER|lb-disable|pool-esgotado' > /tmp/t3-failover.log
+```
+
+Guarde o diretório da execução do `.165`, `/tmp/t3-lb.log` e `/tmp/t3-failover.log` do `.163` e `/tmp/t3-fs2.log` do
+`.162`.
+
+#### O que esperar
+
+Valores derivados do perfil, do runner e do cfg do lab, ainda não medidos:
+
+- **Chamadas em curso no `.162`:** ~200 (40 CPS x 10 s / 2). O FS encerra todas com BYE. O cenário UAC trata BYE
+  remoto como fim normal: elas aparecem em "Encerradas pelo FS (BYE remoto)" no `report.txt`, não como falha.
+- **INVITEs para o `.162` antes da detecção:** ficam sem resposta até o `fr_timeout`. O 408 desabilita o nó e a
+  chamada é refeita no `.163`. Com `SIP_RECV_TIMEOUT_MS=60000`, elas completam com ~5 s de atraso.
+- **Guard de atraso (2000 ms):** deve marcar 1 ou 2 amostras de 5 s; a parada exige 3 seguidas. Se parar, o tempo de
+  detecção está longo demais, e isso também é resultado.
+- **Um nó só:** CPU do `.163` em até ~67%, o mesmo patamar por FS dos 80 CPS de 31/10, com metade da carga do
+  OpenSIPS.
+- **Retorno:** o probing reabilita o nó em até 10 s e o CPS por FS volta a ~50/50.
+
+| Critério | Esperado |
+|---|---|
+| Falhas SIP | 0 |
+| Tempo até o `.162` sair do pool | até o `fr_timeout` (≤ 5 s) ou o probing (≤ 10 s) |
+| INVITE -> 200 acima de 1 s | só durante a detecção |
+| CPU do `.163` com um nó | < 85% |
+| Tempo até o `.162` voltar ao pool | ≤ 10 s, com a carga redividida |
+
+Para medir a capacidade de um nó por mais tempo, repita o perfil a 40 CPS com o FS do `.162` parado desde antes do
+disparo: os ~13 min ficam só no `.163`.
 
 ### T5: teto do OpenSIPS
 
