@@ -50,6 +50,7 @@ Numa VM de teste dentro da rede interna, use os IPs 172.17.4.x.
 | `SIP_RECV_TIMEOUT_MS` | `60000` | | Espera máxima pelo 200 OK; depois a chamada conta como falha |
 | `UAS_PORT` | vazio | `5090` | Porta do atendedor; vazio = sem atendedor |
 | `UAS_RTP_PORT_BASE` | `40000` | | Porta base de RTP do atendedor (diferente de `RTP_PORT_BASE`) |
+| `OPTIONS_LOCAL_PORT` | `5062` | `5062` | Porta local do SIPp de OPTIONS do teste `options` (diferente de `SIP_LOCAL_PORT` e `UAS_PORT`) |
 
 ## FreeSWITCH
 
@@ -111,6 +112,8 @@ Numa VM de teste dentro da rede interna, use os IPs 172.17.4.x.
 | `GUARD_MAX_PDD_MS` | `0` | `2000` | INVITE -> 200 médio do período, em ms (mínimo de 10 chamadas; `0` desliga) |
 | `GUARD_MAX_OS_SHM_PCT` | `0` | `80` | Memória compartilhada do OpenSIPS: amostra ou máximo real, se subiu na execução (`0` desliga) |
 | `GUARD_MAX_DB_CONN_PCT` | `0` | `80` | Conexões do banco sobre `max_connections` (`0` desliga). Acima de 50 CPS, o disparo pelo Zabbix exige este limite, o `GUARD_MAX_OS_SHM_PCT` e o `GUARD_MAX_PDD_MS` |
+| `GUARD_MAX_OPTIONS_FAIL_PCT` | `0` | `1` | Teste `options`: OPTIONS sem 200 em 2 s no período (%). `0` desliga; o disparo pelo Zabbix exige com `options` |
+| `GUARD_MAX_OPTIONS_RT_MS` | `0` | `100` | Teste `options`: OPTIONS -> 200 médio do período (ms). `0` desliga; o disparo pelo Zabbix exige com `options` |
 | `GUARD_MAX_REPL_LAG` | `30` | | Atraso de replicação assíncrona (s); não se aplica ao PXC |
 | `GUARD_MAX_WSREP_FC_PCT` | `10` | | Fração do intervalo com a replicação pausada por flow control (`0` desliga) |
 | `GUARD_MIN_WSREP_CLUSTER_SIZE` | `0` | `2` | Tamanho mínimo do cluster (`0` desliga) |

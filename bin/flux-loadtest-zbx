@@ -46,7 +46,9 @@ declare -A RUNNER=(
 )
 
 # Chaves aceitas no perfil (vazio = padrao do flux-loadtest.sh)
-readonly PROFILE_KEYS="DESC ZABBIX_ENABLED TESTS CPS CPS_CHOICES FS_COUNT CPS_START RAMP_STEP RAMP_INTERVAL WINDOW CALLS HOLD MEDIA WEB_DURATION WEB_CONNS MYSQL_DURATION LABEL"
+readonly PROFILE_KEYS="DESC ZABBIX_ENABLED TESTS CPS CPS_CHOICES FS_COUNT CPS_START RAMP_STEP RAMP_INTERVAL WINDOW CALLS HOLD MEDIA WEB_DURATION WEB_CONNS MYSQL_DURATION LABEL OPTIONS_START OPTIONS_STEP OPTIONS_INTERVAL OPTIONS_MAX OPTIONS_DELAY"
+# Teto da escada de OPTIONS por segundo (teste options): o gerador e um SIPp de uma thread
+readonly OPTIONS_MAX_LIMIT=20000
 # Acima deste CPS o start exige os limites de atraso e de memoria do OpenSIPS no loadtest.conf
 readonly CPS_GUARD_FROM=50
 declare -A P=()
@@ -95,8 +97,9 @@ load_profile() {
     P[ZABBIX_ENABLED]=0
     read_kv "${file}" P "${PROFILE_KEYS}"
     [[ ${P[ZABBIX_ENABLED]} == [01] ]] || die "${E_CONFIG}" "${name}: ZABBIX_ENABLED deve ser 0 ou 1"
-    [[ ${P[TESTS]} =~ ^(sip|web|mysql)(,(sip|web|mysql)){0,2}$ ]] || die "${E_CONFIG}" "${name}: TESTS invalido: '${P[TESTS]}' (sip, web, mysql)"
-    for k in CPS CPS_START RAMP_STEP RAMP_INTERVAL WINDOW CALLS HOLD WEB_DURATION WEB_CONNS MYSQL_DURATION; do
+    [[ ${P[TESTS]} =~ ^(sip|web|mysql|options)(,(sip|web|mysql|options)){0,3}$ ]] || die "${E_CONFIG}" "${name}: TESTS invalido: '${P[TESTS]}' (sip, web, mysql, options)"
+    for k in CPS CPS_START RAMP_STEP RAMP_INTERVAL WINDOW CALLS HOLD WEB_DURATION WEB_CONNS MYSQL_DURATION \
+             OPTIONS_START OPTIONS_STEP OPTIONS_INTERVAL OPTIONS_MAX OPTIONS_DELAY; do
         [[ -z ${P[${k}]} || ${P[${k}]} =~ ^[0-9]{1,6}$ ]] || die "${E_CONFIG}" "${name}: ${k} deve ser inteiro: '${P[${k}]}'"
     done
     [[ -z ${P[MEDIA]} || ${P[MEDIA]} == rtp || ${P[MEDIA]} == none ]] || die "${E_CONFIG}" "${name}: MEDIA deve ser rtp ou none"
@@ -120,6 +123,14 @@ load_profile() {
     fi
     [[ -z ${P[WINDOW]} ]] || ((P[WINDOW] <= RUNNER[ZBX_MAX_WINDOW])) \
         || die "${E_CONFIG}" "${name}: WINDOW ${P[WINDOW]} acima de ZBX_MAX_WINDOW (${RUNNER[ZBX_MAX_WINDOW]})"
+    if [[ ,${P[TESTS]}, == *,options,* ]]; then
+        [[ ,${P[TESTS]}, == *,sip,* ]] || die "${E_CONFIG}" "${name}: options so roda junto com sip em TESTS"
+        [[ -n ${P[OPTIONS_MAX]} ]] && ((P[OPTIONS_MAX] >= 1 && P[OPTIONS_MAX] <= OPTIONS_MAX_LIMIT)) \
+            || die "${E_CONFIG}" "${name}: OPTIONS_MAX obrigatorio com options, de 1 a ${OPTIONS_MAX_LIMIT}"
+    else
+        [[ -z ${P[OPTIONS_START]}${P[OPTIONS_STEP]}${P[OPTIONS_INTERVAL]}${P[OPTIONS_MAX]}${P[OPTIONS_DELAY]} ]] \
+            || die "${E_CONFIG}" "${name}: OPTIONS_* exige options em TESTS"
+    fi
 }
 
 # select_cps NOME [CPS]: com CPS_CHOICES, o valor do operador define CPS e rampa no P carregado
@@ -168,7 +179,8 @@ build_args() {
     RUN_ARGS=(run -c "${RUNNER[FLT_CONF]}" -t "${P[TESTS]}" --label "$(label_of "${name}")")
     for k in CPS:-r CPS_START:--cps-start RAMP_STEP:--ramp-step RAMP_INTERVAL:--ramp-interval \
              WINDOW:-w CALLS:-n HOLD:-H MEDIA:-M WEB_DURATION:--web-duration WEB_CONNS:--web-conns \
-             MYSQL_DURATION:--mysql-duration; do
+             MYSQL_DURATION:--mysql-duration OPTIONS_START:--options-start OPTIONS_STEP:--options-step \
+             OPTIONS_INTERVAL:--options-interval OPTIONS_MAX:--options-max OPTIONS_DELAY:--options-delay; do
         opt=${k#*:}
         k=${k%%:*}
         [[ -z ${P[${k}]} ]] || RUN_ARGS+=("${opt}" "${P[${k}]}")
@@ -284,6 +296,13 @@ cmd_start() {
                     || die "${E_CONFIG}" "${k} vazio ou 0 em ${RUNNER[FLT_CONF]}: obrigatorio acima de ${CPS_GUARD_FROM} CPS"
             done
         fi
+    fi
+    # a escada de OPTIONS so para pelos guards: sem eles, iria ate o topo mesmo com o OpenSIPS saturado
+    if [[ ,${P[TESTS]}, == *,options,* ]]; then
+        for k in GUARD_MAX_OPTIONS_FAIL_PCT GUARD_MAX_OPTIONS_RT_MS; do
+            [[ $(flt_conf_value "${k}") =~ ^[1-9][0-9]*$ ]] \
+                || die "${E_CONFIG}" "${k} vazio ou 0 em ${RUNNER[FLT_CONF]}: obrigatorio com o teste options"
+        done
     fi
     build_args "${name}"
     lock
