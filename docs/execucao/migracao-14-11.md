@@ -62,10 +62,13 @@ Antes de cada um, nos dois FS: `fs-limites.sh aplicar 150 1260`. Rode em um test
 | T1 | `stfc-cps90-30min` | 90 CPS sustentado e causa das travadas |
 | T2 | `stfc-cps90-rtp-escada`, depois `stfc-cps90-rtp-30min` se chegar a 90 | Limite com RTP em todas as chamadas, o pior caso |
 | T3 | `stfc-cps-livre` a 40 CPS, parando e religando o FreeSWITCH do `.162` no patamar | Comportamento do `load_balancer` e capacidade com um nó |
-| T4 | `stfc-cps90-2h`, com a configuração final | Vazamento de memória e degradação |
+| T4 | `stfc-cps90-2h`, com a configuração final e o `coleta-longa.sh` nos servidores | Vazamento de memória e degradação |
 | T5 (opcional) | `stfc-opensips-teto` | Teto do OpenSIPS com INVITE a 90 CPS |
 
 ### Coletas durante T1, T2 e T4
+
+No T4, o `diag-travadas.sh` (fila da 5060) e o `coleta-longa.sh` (conexões do banco) substituem as duas coletas
+abaixo; veja a seção "T4: 2 h a 90 CPS".
 
 No `.163`, a fila do socket do OpenSIPS, 5 vezes por segundo, mostra início e duração de cada travada. Ajuste o
 `timeout` à duração do teste:
@@ -293,6 +296,113 @@ Valores derivados do perfil, do runner e do cfg do lab, ainda não medidos:
 
 Para medir a capacidade de um nó por mais tempo, repita o perfil a 40 CPS com o FS do `.162` parado desde antes do
 disparo: os ~13 min ficam só no `.163`.
+
+### T4: 2 h a 90 CPS
+
+Confirma que nada cresce com o tempo: memória do FreeSWITCH e do OpenSIPS, latência, conexões do banco e disco.
+`stfc-cps90-2h` sobe de 45 a 90 CPS em 5 min (+9 a cada 60 s) e fica 2 h a 90 CPS, só sinalização, hold de
+10 s: ~667 mil chamadas, ~2h08 com baseline e cooldown.
+
+O runner grava a cada 5 s o que já aparece no relatório. O `coleta-longa.sh` completa, por minuto, o que um teste
+longo precisa: RSS, PSS e VmHWM por processo, shm e pkg do OpenSIPS (`get_statistics`), sessões e limites do
+FS, contadores do banco e, no fim, os arquivos e diretórios que mais cresceram, que respondem o disco do `.162`
+visto no T2. Somente leitura; `fs_cli` e `mysql` usam a configuração local do root.
+
+#### Antes de disparar
+
+Copie `coleta-longa.sh` e `diag-travadas.sh` de `/opt/flux-loadtest/deploy/stfc-completo/` no `.165` para
+`/root` do `.163`, `.162`, `.161` e `.164` (o `diag-travadas.sh` só no `.163`), como nos testes anteriores.
+
+Nos dois FS, os limites precisam ser iguais (300 / 5000). No T3, um `/root/flux-loadtest-fs-limites.antes`
+antigo deixou o FS1 em 150 / 1260 e a carga se dividiu 25 / 75:
+
+```bash
+bash fs-limites.sh mostrar
+```
+
+```bash
+cat /root/flux-loadtest-fs-limites.antes
+```
+
+Se o arquivo tiver valores abaixo do `switch.conf`, apague-o e aplique os valores do `switch.conf` (`fsctl` muda
+os limites em runtime, sem restart e sem afetar chamadas em curso):
+
+```bash
+rm -f /root/flux-loadtest-fs-limites.antes
+```
+
+```bash
+bash fs-limites.sh aplicar 300 5000
+```
+
+No `.163`, confirme `xlog_level` em 1:
+
+```bash
+opensips-cli -x mi xlog_level
+```
+
+Espaço em disco: ~100 MB de resultados no `.165`; no `.162`, folga para ~30 GB se o crescimento do T2 (~50 KB
+por chamada) se repetir. O guard para o teste com menos de 15% livre.
+
+```bash
+df -h / /var/lib/freeswitch /var/lib/flux-loadtest 2>/dev/null
+```
+
+Valide o coletor em cada servidor com 2 min, intervalo de 10 s, e confira se o pacote saiu com os arquivos do
+papel do servidor (`fs.tsv` nos FS, `opensips-stats.log` no `.163`, `db.tsv` nos bancos):
+
+```bash
+bash coleta-longa.sh 120 10
+```
+
+#### Disparo
+
+Em cada servidor, dentro de um `tmux`, inicie o coletor logo antes do disparo. 7900 s cobrem o teste e uma margem:
+
+```bash
+tmux new -s t4
+```
+
+```bash
+bash coleta-longa.sh 7900
+```
+
+No `.163`, em outra janela do `tmux`:
+
+```bash
+bash diag-travadas.sh 7900
+```
+
+No Zabbix, rode "Plano stfc-cps90-2h" e depois "Iniciar stfc-cps90-2h".
+
+Durante o teste, acompanhe o `console.log` no `.165` e, no Zabbix, CPS por FS, CPU por servidor e pacotes. O
+guard para o teste sozinho em CPU, memória, disco, falhas, atraso, memória do OpenSIPS e conexões do banco.
+
+#### Depois do teste
+
+Os coletores terminam sozinhos, fazem a busca de arquivos (alguns minutos) e geram o pacote. Nos dois FS:
+
+```bash
+bash fs-limites.sh restaurar
+```
+
+Envie:
+
+- do `.165`: `/var/lib/flux-loadtest/results/<execução>.tar.gz`;
+- do `.163`, `.162`, `.161` e `.164`: `/root/coleta-longa-<host>-<data>.tar.gz`;
+- do `.163`: a pasta `/root/diag-travadas-<data>/`.
+
+#### Critério do T4
+
+Os critérios de aceite de 90 CPS e, comparando os três terços do patamar de 2 h:
+
+| Medida | Esperado |
+|---|---|
+| RSS / PSS do FreeSWITCH, `.163` e `.162` | Sem alta contínua entre os terços; volta perto do valor de antes depois do teste |
+| shm e pkg do OpenSIPS | Sem alta contínua; `max_used_size` da shm abaixo de 80% |
+| INVITE -> 200 e pior período de 5 s | Sem tendência entre os terços |
+| `Connection_errors_max_connections` | Sem aumento |
+| Disco | Crescimento explicado por `arquivos-crescidos.txt` e compatível com a operação real |
 
 ### T5: teto do OpenSIPS
 
