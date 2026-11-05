@@ -71,6 +71,9 @@ SIP_RECV_TIMEOUT_MS=60000
 # atendido no FS, ex.: caixa postal).
 UAS_PORT=5090
 UAS_RTP_PORT_BASE=40000
+# Porta local do SIPp de OPTIONS (teste options: escada de OPTIONS ao OpenSIPS em paralelo aos
+# INVITEs). Diferente de SIP_LOCAL_PORT e de UAS_PORT; as respostas voltam do OpenSIPS para ela.
+OPTIONS_LOCAL_PORT=5062
 
 # ------------------------------------------------------------------ FreeSWITCH
 # Executado no servidor FS pelo usuario SSH
@@ -162,6 +165,10 @@ GUARD_MAX_OS_SHM_PCT=0
 # Conexoes do banco / max_connections (%). No limite, clientes recebem "Too many connections".
 # 0 = desligado. O disparo pelo Zabbix tambem exige este limite acima de 50 CPS.
 GUARD_MAX_DB_CONN_PCT=0
+# Teste options: falha de OPTIONS no periodo (%) e OPTIONS -> 200 medio (ms). Sao eles que param
+# a escada quando o OpenSIPS satura. 0 = desligado; o disparo pelo Zabbix exige os dois com options.
+GUARD_MAX_OPTIONS_FAIL_PCT=0
+GUARD_MAX_OPTIONS_RT_MS=0
 # Replicacao assincrona (nao se aplica ao Percona XtraDB Cluster)
 GUARD_MAX_REPL_LAG=30
 # Percona XtraDB Cluster: no fora de Synced ou sem quorum (Primary) sempre interrompem.

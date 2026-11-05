@@ -63,6 +63,7 @@ Antes de cada um, nos dois FS: `fs-limites.sh aplicar 150 1260`. Rode em um test
 | T2 | `stfc-cps90-rtp-escada`, depois `stfc-cps90-rtp-30min` se chegar a 90 | Limite com RTP em todas as chamadas, o pior caso |
 | T3 | `stfc-cps-livre` a 40 CPS, parando o FreeSWITCH de um nó | Comportamento do `load_balancer` e capacidade com um nó |
 | T4 | `stfc-cps90-2h`, com a configuração final | Vazamento de memória e degradação |
+| T5 (opcional) | `stfc-opensips-teto` | Teto do OpenSIPS com INVITE a 90 CPS |
 
 ### Coletas durante T1, T2 e T4
 
@@ -206,6 +207,25 @@ Depois do teste, religue o nó:
 ```bash
 systemctl start freeswitch && sleep 10 && fs_cli -x status | head -n 3
 ```
+
+### T5: teto do OpenSIPS
+
+Os FS limitam o sistema antes do OpenSIPS, então o teto dele nunca foi medido. O `stfc-opensips-teto` mantém INVITE a
+90 CPS pelo caminho real e, a partir de 300 s, sobe uma escada de OPTIONS de 500 a 5000/s. O OpenSIPS responde esses
+OPTIONS sozinho (rota `options-keepalive`), sem banco e sem FS: a carga extra fica só nele.
+
+Antes, no `.165`, acrescente ao `/etc/flux-loadtest/loadtest.conf` os guards de OPTIONS e instale o perfil:
+
+```bash
+grep -q '^GUARD_MAX_OPTIONS_FAIL_PCT=' /etc/flux-loadtest/loadtest.conf || printf 'OPTIONS_LOCAL_PORT=5062\nGUARD_MAX_OPTIONS_FAIL_PCT=1\nGUARD_MAX_OPTIONS_RT_MS=100\n' >> /etc/flux-loadtest/loadtest.conf; install -m 0644 /opt/flux-loadtest/deploy/stfc-completo/profiles/stfc-opensips-teto.conf /etc/flux-loadtest/profiles.d/
+```
+
+Rode com `bash /root/diag-travadas.sh 1500` no `.163`. A seção "OPTIONS ao OpenSIPS" do relatório traz a tabela por
+degrau, o teto sustentado e o motivo da parada:
+
+- falha ou resposta de OPTIONS acima do limite: teto do OpenSIPS;
+- CPU do `.163` acima de 85% com resposta normal: teto do host, que divide a CPU com um FS. O OpenSIPS isolado iria
+  além, e a coluna `opensips` (CPU do processo) mostra quanto ele usava.
 
 ## Decisão em 05-06/11
 

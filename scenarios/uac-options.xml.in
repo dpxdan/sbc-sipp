@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="ISO-8859-1" ?>
+<!DOCTYPE scenario SYSTEM "sipp.dtd">
+
+<!--
+  WEB-1437 - OPTIONS ao OpenSIPS, respondido por ele mesmo (rota options-keepalive:
+  is_method("OPTIONS") && is_myself($rd, $rp) -> send_reply(200)), sem banco e sem FS.
+  Usado em paralelo aos INVITEs (teste "options" do flux-loadtest.sh) para levar o
+  OpenSIPS ao teto sem saturar os FreeSWITCH. Uma transacao por "chamada".
+
+  Modelo processado pelo flux-loadtest.sh. Nao usar direto no sipp:
+    @RUN_ID@      identificador da execucao (header X-Flux-Loadtest)
+
+  A Request-URI aponta para o proprio OpenSIPS (remote_ip:remote_port): sem isso o
+  is_myself nao casa e o OPTIONS segue o roteamento comum.
+  RTD 1 = OPTIONS -> 200 (resposta stateless do OpenSIPS)
+-->
+<scenario name="WEB-1437 OPTIONS OpenSIPS">
+
+  <send retrans="500" start_rtd="1">
+    <![CDATA[
+
+      OPTIONS sip:[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch];rport
+      Max-Forwards: 70
+      From: <sip:flt-options@[local_ip]:[local_port]>;tag=[pid]OP[call_number]
+      To: <sip:[remote_ip]:[remote_port]>
+      Call-ID: [call_id]
+      CSeq: 1 OPTIONS
+      Contact: <sip:flt-options@[local_ip]:[local_port]>
+      Accept: application/sdp
+      User-Agent: flux-loadtest
+      X-Flux-Loadtest: @RUN_ID@
+      Content-Length: 0
+
+    ]]>
+  </send>
+
+  <recv response="200" rtd="1"/>
+
+  <ResponseTimeRepartition value="5, 10, 20, 50, 100, 200, 500, 1000"/>
+
+</scenario>

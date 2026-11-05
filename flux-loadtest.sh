@@ -41,6 +41,10 @@ readonly SCENARIO_TPL="${SCRIPT_DIR}/scenarios/uac-did.xml.in"
 readonly UAS_TPL="${SCRIPT_DIR}/scenarios/uas-answer.xml.in"
 # porta de controle do SIPp atendedor (o originador usa a padrao, 8888)
 readonly UAS_CONTROL_PORT=8889
+readonly OPTIONS_TPL="${SCRIPT_DIR}/scenarios/uac-options.xml.in"
+readonly OPTIONS_CONTROL_PORT=8890
+# Cada OPTIONS e respondido pelo proprio OpenSIPS: sem 200 em 2 s, a transacao conta como falha
+readonly OPTIONS_RECV_TIMEOUT_MS=2000
 readonly ZBX_HELPER="${SCRIPT_DIR}/lib/flux_zabbix.py"
 readonly ZBX_TEMPLATE="${SCRIPT_DIR}/zabbix/flux-loadtest-templates.yaml"
 readonly ZBX_CPS_TEMPLATE="${SCRIPT_DIR}/zabbix/fluxsbc-cps-template.yaml"
@@ -63,7 +67,7 @@ declare -A CFG=(
     [OPENSIPS_HOST]="" [FS_HOSTS]="" [DB_HOSTS]="" [WEB_HOST]=""
     [SIP_TARGET]="" [SIP_LOCAL_IP]="" [SIP_LOCAL_PORT]="5060"
     [DID_FILE]="" [CALLER_ID]="" [RTP_PORT_BASE]="20000" [SIP_RECV_TIMEOUT_MS]="60000"
-    [UAS_PORT]="" [UAS_RTP_PORT_BASE]="40000"
+    [UAS_PORT]="" [UAS_RTP_PORT_BASE]="40000" [OPTIONS_LOCAL_PORT]="5062"
     [FS_CLI_CMD]="fs_cli -x" [FS_CLI_PASSWORD_FILE]="" [FS_DISK_PATH]="/var/lib/freeswitch"
     [VM_BOXES]="" [VM_GREETING_SECONDS]="8" [VM_BYTES_PER_SECOND]="16000"
     [OPENSIPS_MI_CMD]="opensips-cli -x mi"
@@ -78,6 +82,7 @@ declare -A CFG=(
     [GUARD_MIN_DISK_FREE_PCT]="15" [GUARD_MAX_FAIL_PCT]="5" [GUARD_MAX_PDD_MS]="0" [GUARD_MAX_REPL_LAG]="30"
     [GUARD_MAX_CORE_PCT]="0" [GUARD_MAX_OS_SHM_PCT]="0" [GUARD_MAX_DB_CONN_PCT]="0" [GUARD_HITS]="3"
     [GUARD_MAX_WSREP_FC_PCT]="10" [GUARD_MIN_WSREP_CLUSTER_SIZE]="0"
+    [GUARD_MAX_OPTIONS_FAIL_PCT]="0" [GUARD_MAX_OPTIONS_RT_MS]="0"
     [SAMPLE_INTERVAL]="5" [BASELINE_SECONDS]="60" [COOLDOWN_SECONDS]="60"
     [CAPACITY_ALERT_PCT]="80"
     [RESULTS_DIR]="/var/lib/flux-loadtest/results"
@@ -122,7 +127,7 @@ validate_config() {
                GUARD_MIN_DISK_FREE_PCT GUARD_MAX_FAIL_PCT GUARD_MAX_PDD_MS GUARD_MAX_REPL_LAG GUARD_MAX_CORE_PCT \
                GUARD_MAX_OS_SHM_PCT GUARD_MAX_DB_CONN_PCT GUARD_HITS GUARD_MAX_WSREP_FC_PCT GUARD_MIN_WSREP_CLUSTER_SIZE \
                SAMPLE_INTERVAL BASELINE_SECONDS COOLDOWN_SECONDS ZABBIX_PORT UAS_RTP_PORT_BASE \
-               CAPACITY_ALERT_PCT; do
+               CAPACITY_ALERT_PCT OPTIONS_LOCAL_PORT GUARD_MAX_OPTIONS_FAIL_PCT GUARD_MAX_OPTIONS_RT_MS; do
         is_uint "${CFG[${key}]}" || die "${E_CONFIG}" "${key} deve ser inteiro: '${CFG[${key}]}'"
     done
     if [[ -n ${CFG[UAS_PORT]} ]]; then
@@ -134,6 +139,10 @@ validate_config() {
         ((CFG[UAS_RTP_PORT_BASE] != CFG[RTP_PORT_BASE])) \
             || die "${E_CONFIG}" "UAS_RTP_PORT_BASE deve ser diferente de RTP_PORT_BASE"
     fi
+    ((CFG[OPTIONS_LOCAL_PORT] >= 1 && CFG[OPTIONS_LOCAL_PORT] <= 65535)) \
+        || die "${E_CONFIG}" "OPTIONS_LOCAL_PORT invalida: '${CFG[OPTIONS_LOCAL_PORT]}'"
+    ((CFG[OPTIONS_LOCAL_PORT] != CFG[SIP_LOCAL_PORT])) && [[ ${CFG[OPTIONS_LOCAL_PORT]} != "${CFG[UAS_PORT]}" ]] \
+        || die "${E_CONFIG}" "OPTIONS_LOCAL_PORT deve ser diferente de SIP_LOCAL_PORT e de UAS_PORT"
     ((CFG[SAMPLE_INTERVAL] >= 1)) || die "${E_CONFIG}" "SAMPLE_INTERVAL minimo: 1"
     ((CFG[CAPACITY_ALERT_PCT] >= 1 && CFG[CAPACITY_ALERT_PCT] <= 100)) || die "${E_CONFIG}" "CAPACITY_ALERT_PCT fora de 1-100"
     [[ ${CFG[SSH_KEY_TYPE]} == ed25519 || ${CFG[SSH_KEY_TYPE]} == rsa ]] \
@@ -476,6 +485,95 @@ stop_uas() {
     log "atendedor SIPp encerrado"
 }
 
+# --------------------------------------------------------------- OPTIONS (teto do OpenSIPS)
+# Teste "options": um terceiro SIPp envia OPTIONS ao OpenSIPS em escada, em paralelo aos
+# INVITEs. O OpenSIPS responde sozinho (rota options-keepalive), sem banco e sem FS, entao a
+# escada leva o OpenSIPS ao teto sem saturar os FreeSWITCH. Comeca --options-delay s depois
+# do inicio da fase sip (a rampa de INVITE termina antes) e para com a saida suave do SIPp.
+OPT_PID=""
+OPT_STARTED=0
+OPT_SOFT_SENT=0
+OPT_DEAD_WARNED=0
+OPTIONS_ARGS=()
+
+prepare_options() {
+    local dir=$1 local_ip=$2 limit
+    has_test options || return 0
+    mkdir -p "${dir}"
+    render_scenario "${OPTIONS_TPL}" "${dir}/options.xml" 0 none
+    # transacoes abertas: cada uma dura ate o recv_timeout (2 s); folga de 50%
+    limit=$((OPT_OPTIONS_MAX * OPTIONS_RECV_TIMEOUT_MS * 3 / 2000 + 100))
+    OPTIONS_ARGS=("${SIP_TARGET_IP}:${SIP_TARGET_PORT}"
+        -sf "${dir}/options.xml" -i "${local_ip}" -p "${CFG[OPTIONS_LOCAL_PORT]}" -t u1 -nostdin
+        -cp "${OPTIONS_CONTROL_PORT}" -l "${limit}" -recv_timeout "${OPTIONS_RECV_TIMEOUT_MS}"
+        -timeout $((OPT_WINDOW + 300)) -buff_size 4194304
+        -trace_stat -stf "${dir}/stats.csv" -fd "${CFG[SAMPLE_INTERVAL]}"
+        -trace_err -error_file "${dir}/errors.log")
+    if ((OPT_OPTIONS_START < OPT_OPTIONS_MAX)); then
+        OPTIONS_ARGS+=(-r "${OPT_OPTIONS_START}" -rate_increase "${OPT_OPTIONS_STEP}"
+            -rate_interval "${OPT_OPTIONS_INTERVAL}" -rate_max "${OPT_OPTIONS_MAX}" -no_rate_quit)
+    else
+        OPTIONS_ARGS+=(-r "${OPT_OPTIONS_MAX}")
+    fi
+}
+
+start_options() {
+    local dir="${RUN_DIR}/options"
+    (cd "${dir}" && exec sipp "${OPTIONS_ARGS[@]}" > /dev/null 2> "${dir}/sipp.stderr") &
+    OPT_PID=$!
+    OPT_STARTED=1
+    # inicio, escada e limites: o relatorio recorta os degraus por aqui, mesmo regerado depois
+    printf '%s %s %s %s %s %s %s %s\n' "$(now)" "${OPT_OPTIONS_START}" "${OPT_OPTIONS_STEP}" \
+        "${OPT_OPTIONS_INTERVAL}" "${OPT_OPTIONS_MAX}" "${CFG[GUARD_MAX_OPTIONS_RT_MS]}" \
+        "${CFG[GUARD_MAX_OPTIONS_FAIL_PCT]}" "${CFG[GUARD_MAX_CPU_PCT]}" > "${dir}/plan.txt"
+    log "SIPp de OPTIONS iniciado (pid ${OPT_PID}): ${OPT_OPTIONS_START} -> ${OPT_OPTIONS_MAX}/s (+${OPT_OPTIONS_STEP} a cada ${OPT_OPTIONS_INTERVAL} s)"
+}
+
+# SIGUSR1 uma vez (o SIPp 3.6.1 trava com um segundo); SIGTERM se nao sair em 10 s
+stop_options() {
+    local i
+    [[ -n ${OPT_PID} ]] || return 0
+    if kill -0 "${OPT_PID}" 2>/dev/null; then
+        if ((OPT_SOFT_SENT == 0)); then
+            kill -USR1 "${OPT_PID}" 2>/dev/null || true
+            OPT_SOFT_SENT=1
+        fi
+        for ((i = 0; i < 20; i++)); do
+            kill -0 "${OPT_PID}" 2>/dev/null || break
+            sleep 0.5 || true
+        done
+        if kill -0 "${OPT_PID}" 2>/dev/null; then
+            warn "SIPp de OPTIONS nao encerrou em 10 s; enviando SIGTERM"
+            kill -TERM "${OPT_PID}" 2>/dev/null || true
+        fi
+    fi
+    wait "${OPT_PID}" 2>/dev/null || true
+    OPT_PID=""
+    log "SIPp de OPTIONS encerrado"
+    if [[ -n $(sip_real_errors "${RUN_DIR}/options/sipp.stderr") ]]; then
+        warn "SIPp de OPTIONS stderr: $(sip_real_errors "${RUN_DIR}/options/sipp.stderr" | head -c 300 | tr '\n' ' ')"
+    fi
+}
+
+# Ultimo periodo do -trace_stat de OPTIONS: "falha_x100 falhas encerradas resposta_ms".
+# Falha em centesimos de ponto percentual; resposta = OPTIONS -> 200 medio (-1 sem a coluna).
+# So com 50 ou mais transacoes encerradas no periodo.
+options_stat() {
+    local file="${RUN_DIR}/options/stats.csv"
+    [[ -s ${file} ]] || return 0
+    awk -F';' 'NR == 1 { for (i = 1; i <= NF; i++) c[$i] = i; next } { l = $0 }
+        END {
+            if (l == "" || !("FailedCall(P)" in c)) exit
+            split(l, v, ";")
+            f = v[c["FailedCall(P)"]] + 0; s = v[c["SuccessfulCall(P)"]] + 0
+            if (f + s < 50) exit
+            rt = -1
+            if ("ResponseTime1(P)" in c && split(v[c["ResponseTime1(P)"]], t, ":") == 4)
+                rt = int((t[1] * 3600 + t[2] * 60 + t[3]) * 1000 + t[4] / 1000)
+            printf "%d %d %d %d\n", f * 10000 / (f + s), f, f + s, rt
+        }' "${file}"
+}
+
 # --------------------------------------------------------------- execucao
 CONFIG_FILE=""
 RUN_ID=""
@@ -648,6 +746,18 @@ guard_check() {
                 current["sip:pdd_ms"]="${pdd}ms (INVITE -> 200 medio do periodo)"
             fi
         fi
+        line=""
+        ((OPT_STARTED)) && { line=$(options_stat) || true; }
+        if [[ -n ${line} ]]; then
+            local opct ofails ototal ort
+            read -r opct ofails ototal ort <<< "${line}"
+            if ((CFG[GUARD_MAX_OPTIONS_FAIL_PCT] > 0 && opct > CFG[GUARD_MAX_OPTIONS_FAIL_PCT] * 100)); then
+                current["options:falha_pct"]="$((opct / 100)).$(printf '%02d' $((opct % 100)))% (${ofails}/${ototal})"
+            fi
+            if ((CFG[GUARD_MAX_OPTIONS_RT_MS] > 0 && ${ort:--1} > CFG[GUARD_MAX_OPTIONS_RT_MS])); then
+                current["options:resposta_ms"]="${ort}ms (OPTIONS -> 200 medio do periodo)"
+            fi
+        fi
     fi
     for key in "${!GUARD_COUNT[@]}"; do
         [[ -n ${current[${key}]+x} ]] || unset 'GUARD_COUNT[${key}]'
@@ -676,6 +786,10 @@ sipp_soft_stop() {
 # Para a carga em andamento: SIPp com SIGUSR1 (saida suave), wrk/sysbench com SIGTERM.
 stop_load() {
     sipp_soft_stop
+    if [[ -n ${OPT_PID} ]] && ((OPT_SOFT_SENT == 0)) && kill -0 "${OPT_PID}" 2>/dev/null; then
+        kill -USR1 "${OPT_PID}" 2>/dev/null || true
+        OPT_SOFT_SENT=1
+    fi
     if [[ -n ${LOAD_PID} ]] && kill -0 "${LOAD_PID}" 2>/dev/null; then
         kill -TERM "${LOAD_PID}" 2>/dev/null || true
     fi
@@ -686,6 +800,7 @@ on_interrupt() {
         warn "segunda interrupcao: encerrando a carga imediatamente"
         [[ -n ${SIPP_PID} ]] && kill -TERM "${SIPP_PID}" 2>/dev/null
         [[ -n ${UAS_PID} ]] && kill -TERM "${UAS_PID}" 2>/dev/null
+        [[ -n ${OPT_PID} ]] && kill -TERM "${OPT_PID}" 2>/dev/null
         [[ -n ${LOAD_PID} ]] && kill -TERM "${LOAD_PID}" 2>/dev/null
         exit "${E_ABORT}"
     fi
@@ -703,6 +818,9 @@ on_exit() {
     fi
     if [[ -n ${UAS_PID} ]] && kill -0 "${UAS_PID}" 2>/dev/null; then
         kill -TERM "${UAS_PID}" 2>/dev/null || true
+    fi
+    if [[ -n ${OPT_PID} ]] && kill -0 "${OPT_PID}" 2>/dev/null; then
+        kill -TERM "${OPT_PID}" 2>/dev/null || true
     fi
     if [[ -n ${LOAD_PID} ]] && kill -0 "${LOAD_PID}" 2>/dev/null; then
         kill -TERM "${LOAD_PID}" 2>/dev/null || true
@@ -1096,6 +1214,7 @@ cmd_zabbix() {
 
 # --------------------------------------------------------------- fases de carga
 OPT_WINDOW=300 OPT_CALLS=0 OPT_CPS="" OPT_CPS_START="" OPT_RAMP_STEP="" OPT_RAMP_INTERVAL=10
+OPT_OPTIONS_START="" OPT_OPTIONS_STEP="" OPT_OPTIONS_INTERVAL=60 OPT_OPTIONS_MAX="" OPT_OPTIONS_DELAY=0
 OPT_LIMIT="" OPT_HOLD=30 OPT_MEDIA=rtp OPT_TESTS="sip,web" OPT_LABEL=""
 OPT_WEB_DURATION=30 OPT_WEB_CONNS=50 OPT_WEB_THREADS=4 OPT_MYSQL_DURATION=60
 OPT_BASELINE="" OPT_COOLDOWN="" OPT_CONFIRM_PROD=0 OPT_YES=0 OPT_DRY_RUN=0 OPT_DID=""
@@ -1163,7 +1282,7 @@ sip_all_done() {
 }
 
 run_sip_phase() {
-    local dir="${RUN_DIR}/sip" local_ip=$1 t_end soft_at=0 rc=0
+    local dir="${RUN_DIR}/sip" local_ip=$1 t_end t_opt soft_at=0 rc=0
     raise_nofile $((OPT_LIMIT * 3 + 1024))
     phase_begin sip
     start_uas "${RUN_DIR}/uas"
@@ -1171,18 +1290,27 @@ run_sip_phase() {
     SIPP_PID=$!
     SIPP_SOFT_SENT=0
     t_end=$(( $(now) + OPT_WINDOW ))
+    t_opt=$(( $(now) + OPT_OPTIONS_DELAY ))
     log "SIPp iniciado (pid ${SIPP_PID}): alvo ${OPT_CPS} CPS, janela ${OPT_WINDOW} s, hold ${OPT_HOLD} s"
 
     while kill -0 "${SIPP_PID}" 2>/dev/null; do
         sleep "${CFG[SAMPLE_INTERVAL]}" || true
         kill -0 "${SIPP_PID}" 2>/dev/null || break
         if ((soft_at == 0)); then
+            if has_test options && ((OPT_STARTED == 0)) && (( $(now) >= t_opt )) && [[ -z ${ABORT_REASON} ]]; then
+                start_options
+            fi
+            if [[ -n ${OPT_PID} ]] && ((OPT_DEAD_WARNED == 0)) && ! kill -0 "${OPT_PID}" 2>/dev/null; then
+                warn "SIPp de OPTIONS saiu antes do fim: $(sip_real_errors "${RUN_DIR}/options/sipp.stderr" | head -c 300 | tr '\n' ' ')"
+                OPT_DEAD_WARNED=1
+            fi
             guard_check 1
             # A foto "pico" precisa da carga: sai antes do fim da janela
             if (( $(now) >= t_end - CAP_PICO_LEAD_S )); then capacity_pico_start; fi
             if [[ -n ${ABORT_REASON} ]] || (( $(now) >= t_end )); then
                 capacity_pico_start
                 sipp_soft_stop
+                stop_options
                 soft_at=$(now)
                 phase_end
                 phase_begin sip_drain
@@ -1202,6 +1330,7 @@ run_sip_phase() {
     done
     wait "${SIPP_PID}" 2>/dev/null || rc=$?
     SIPP_PID=""
+    stop_options
     stop_uas
     phase_end
     log "SIPp encerrado (rc=${rc}; 0 = sem falhas, 1 = houve chamadas com falha)"
@@ -1538,6 +1667,94 @@ report_uas() {
     fi
 }
 
+# Escada de OPTIONS por degrau (teste options). options/plan.txt = "inicio inicial passo
+# intervalo topo resposta_max_ms falha_max_pct cpu_max_pct"; degrau = intervalo a partir do
+# inicio. Cruza o SIPp de OPTIONS, o INVITE -> 100 do SIPp principal (gerado pelo OpenSIPS)
+# e as metricas do host do OpenSIPS. Teto = maior degrau, contado do primeiro, sem falha,
+# com resposta e CPU do host dentro dos limites.
+report_options() {
+    local dir=$1 stats="$1/options/stats.csv" plan="$1/options/plan.txt" osm
+    local total ok fail tmo rt pct="-" t0 start step iv top maxrt maxcpu sst
+    [[ -s ${stats} && -s ${plan} ]] || { printf '  (sem dados do SIPp de OPTIONS)\n'; return 0; }
+    read -r t0 start step iv top maxrt _ maxcpu < "${plan}"
+    IFS='|' read -r total ok fail tmo rt < <(sipp_last "${stats}" TotalCallCreated \
+        "SuccessfulCall(C)" "FailedCall(C)" "FailedTimeoutOnRecv(C)" "ResponseTime1(C)") || true
+    if (( ${ok:-0} + ${fail:-0} > 0 )); then
+        pct=$(awk -v f="${fail}" -v o="${ok}" 'BEGIN { printf "%.3f", f * 100 / (f + o) }')
+    fi
+    printf '  %-36s %s\n' "OPTIONS enviados" "${total}"
+    printf '  %-36s %s\n' "Respondidos (200)" "${ok}"
+    printf '  %-36s %s (%s%%)\n' "Falhas" "${fail}" "${pct}"
+    printf '  %-36s %s\n' "  sem resposta em 2 s" "${tmo}"
+    printf '  %-36s %s ms\n' "OPTIONS -> 200 (media)" "$(awk -v t="${rt}" 'BEGIN { if (split(t, a, ":") == 4) printf "%.1f", (a[1] * 3600 + a[2] * 60 + a[3]) * 1000 + a[4] / 1000; else printf "-" }')"
+    printf '  %-36s %s/s -> %s/s, +%s a cada %s s\n' "Escada" "${start}" "${top}" "${step}" "${iv}"
+    osm="${dir}/metrics/opensips.csv"
+    [[ -s ${osm} ]] || osm=/dev/null
+    sst="${dir}/sip/stats.csv"
+    [[ -s ${sst} ]] || sst=/dev/null
+    printf '\n  Por degrau (CPU do host e do OpenSIPS: media / pico; thread: pico; INVITE -> 100: media)\n'
+    awk -v t0="${t0}" -v start="${start}" -v step="${step}" -v iv="${iv}" -v top="${top}" \
+        -v maxrt="${maxrt}" -v maxcpu="${maxcpu}" -v fo="${stats}" -v fs="${sst}" '
+        function ms(x,   t) { return split(x, t, ":") == 4 ? (t[1] * 3600 + t[2] * 60 + t[3]) * 1000 + t[4] / 1000 : -1 }
+        function slot(ts) { if (ts < t0) return -1; k = int((ts - t0) / iv); if (k > last) last = k; return k }
+        function sipp_ts(x,   t) { return split(x, t, "\t") >= 3 ? t[3] + 0 : 0 }
+        BEGIN { last = -1 }
+        FNR == 1 {
+            delete h
+            sep = (FILENAME == fo || FILENAME == fs) ? ";" : ","
+            n = split($0, a, sep); for (i = 1; i <= n; i++) h[a[i]] = i
+            next
+        }
+        FILENAME == fo {
+            split($0, v, ";"); k = slot(sipp_ts(v[h["CurrentTime"]])); if (k < 0) next
+            o = v[h["SuccessfulCall(P)"]] + 0; f = v[h["FailedCall(P)"]] + 0; r = ms(v[h["ResponseTime1(P)"]])
+            np[k]++; rate[k] += v[h["CallRate(P)"]] + 0; okn[k] += o; fl[k] += f
+            if (o > 0 && r >= 0) { rs[k] += r * o; if (r > rmax[k]) rmax[k] = r }
+            next
+        }
+        FILENAME == fs {
+            split($0, v, ";"); k = slot(sipp_ts(v[h["CurrentTime"]])); if (k < 0) next
+            r = ms(v[h["ResponseTime1(P)"]]); if (r > 0) { i1[k] += r; i1n[k]++ }
+            next
+        }
+        {
+            split($0, v, ","); if (!("ts" in h)) next
+            k = slot(v[h["ts"]] + 0); if (k < 0 || k > last) next
+            c = v[h["cpu_pct"]] + 0; hc[k] += c; hn[k]++; if (c > hm[k]) hm[k] = c
+            if ("opensips_cpu_pct" in h) { c = v[h["opensips_cpu_pct"]] + 0; oc[k] += c; if (c > om[k]) om[k] = c }
+            if ("opensips_max_thread_pct" in h) { c = v[h["opensips_max_thread_pct"]] + 0; if (c > tm[k]) tm[k] = c }
+            if ("os_rcv_req_s" in h) rq[k] += v[h["os_rcv_req_s"]] + 0
+        }
+        END {
+            printf "  %-6s %7s %7s %9s %9s %7s %8s %11s %11s %7s %8s\n", "degrau", "alvo/s", "real/s", "resp_ms", "pior_ms", "falhas", "INV->100", "cpu_host", "opensips", "thread", "req/s"
+            teto = -1; motivo = ""
+            for (k = 0; k <= last; k++) {
+                alvo = start + k * step; if (alvo > top) alvo = top
+                if (!(k in np)) continue
+                rm = okn[k] > 0 ? rs[k] / okn[k] : -1
+                printf "  %-6d %7d %7.0f %9s %9s %7d %8s %11s %11s %7s %8s%s\n", k + 1, alvo, rate[k] / np[k],
+                    (rm >= 0 ? sprintf("%.1f", rm) : "-"), (rmax[k] > 0 ? sprintf("%.1f", rmax[k]) : "-"), fl[k],
+                    (i1n[k] ? sprintf("%.1f", i1[k] / i1n[k]) : "-"),
+                    (hn[k] ? sprintf("%.0f/%.0f", hc[k] / hn[k], hm[k]) : "-"), (hn[k] ? sprintf("%.0f/%.0f", oc[k] / hn[k], om[k]) : "-"),
+                    (hn[k] ? sprintf("%.0f", tm[k]) : "-"), (hn[k] ? sprintf("%.0f", rq[k] / hn[k]) : "-"),
+                    (np[k] < 2 ? "  (parcial)" : "")
+                if (motivo != "") continue
+                if (fl[k] > 0) motivo = sprintf("falhas de OPTIONS no degrau %d (%d)", k + 1, fl[k])
+                else if (maxrt > 0 && rm > maxrt) motivo = sprintf("resposta media de %.1f ms no degrau %d (limite %d ms)", rm, k + 1, maxrt)
+                else if (hn[k] && hm[k] > maxcpu) motivo = sprintf("CPU do host do OpenSIPS em %.0f%% no degrau %d (limite %d%%)", hm[k], k + 1, maxcpu)
+                else teto = k
+            }
+            if (last < 0) { printf "  (nenhum periodo depois do inicio da escada)\n"; exit }
+            if (teto >= 0) {
+                alvo = start + teto * step; if (alvo > top) alvo = top
+                printf "\n  Teto sustentado: %d OPTIONS/s (degrau %d) em paralelo aos INVITEs\n", alvo, teto + 1
+            } else printf "\n  Teto sustentado: nenhum degrau completo dentro dos limites\n"
+            if (motivo != "") printf "  Limite: %s\n", motivo
+            else printf "  Limite: nao atingido; a escada chegou ao topo (%d/s)\n", top
+            printf "  Falha ou resposta alta = limite do OpenSIPS; CPU do host com resposta normal = limite do .163, que divide a CPU com um FS\n"
+        }' "${stats}" "${sst}" "${osm}" 2>/dev/null || printf '  (falha ao montar a tabela por degrau)\n'
+}
+
 generate_report() {
     local dir=$1 out="$1/report.txt" k f
     [[ -d ${dir} ]] || die "${E_USAGE}" "diretorio de resultado inexistente: ${dir}"
@@ -1577,6 +1794,11 @@ generate_report() {
         if [[ -d ${dir}/uas ]]; then
             printf '\n== Atendedor (SIPp UAS em %s)\n' "$(awk -F= '$1 == "atendedor" { print $2 }' "${dir}/run.env" 2>/dev/null)"
             report_uas "${dir}"
+        fi
+
+        if [[ -d ${dir}/options ]]; then
+            printf '\n== OPTIONS ao OpenSIPS (resposta do proprio OpenSIPS, sem FS)\n'
+            report_options "${dir}"
         fi
 
         if [[ -d ${dir}/mysql ]]; then
@@ -1986,7 +2208,13 @@ Opcoes do run:
   -H, --hold SEG        duracao da chamada atendida antes do BYE (padrao 30)
   -M, --media MODO      rtp (SIPp envia G.711 a-law; com UAS_PORT o atendedor tambem envia)
                         | none (sem RTP nos SIPp) (padrao rtp)
-  -t, --tests LISTA     sip,web,mysql (padrao sip,web; mysql = sysbench)
+  -t, --tests LISTA     sip,web,mysql,options (padrao sip,web; mysql = sysbench; options = escada de
+                        OPTIONS ao OpenSIPS em paralelo aos INVITEs, so junto com sip)
+      --options-max N       OPTIONS/s no topo da escada (obrigatorio com options)
+      --options-start N     OPTIONS/s no primeiro degrau (padrao: 10% do topo)
+      --options-step N      incremento por degrau (padrao: --options-start)
+      --options-interval S  duracao de cada degrau (padrao 60)
+      --options-delay S     inicio da escada apos o inicio da fase sip (padrao 0)
       --web-duration S  duracao de cada alvo web (padrao 30)
       --web-conns N     conexoes simultaneas do wrk (padrao 50)
       --web-threads N   threads do wrk (padrao 4)
@@ -2020,6 +2248,11 @@ parse_run_opts() {
             --cps-start)        OPT_CPS_START=${2:-}; shift 2 ;;
             --ramp-step)        OPT_RAMP_STEP=${2:-}; shift 2 ;;
             --ramp-interval)    OPT_RAMP_INTERVAL=${2:-}; shift 2 ;;
+            --options-max)      OPT_OPTIONS_MAX=${2:-}; shift 2 ;;
+            --options-start)    OPT_OPTIONS_START=${2:-}; shift 2 ;;
+            --options-step)     OPT_OPTIONS_STEP=${2:-}; shift 2 ;;
+            --options-interval) OPT_OPTIONS_INTERVAL=${2:-}; shift 2 ;;
+            --options-delay)    OPT_OPTIONS_DELAY=${2:-}; shift 2 ;;
             -l|--max-concurrent) OPT_LIMIT=${2:-}; shift 2 ;;
             -H|--hold)          OPT_HOLD=${2:-}; shift 2 ;;
             -M|--media)         OPT_MEDIA=${2:-}; shift 2 ;;
@@ -2054,8 +2287,20 @@ validate_run_opts() {
     IFS=',' read -ra v <<< "${OPT_TESTS}"
     ((${#v[@]} > 0)) || die "${E_USAGE}" "--tests vazio"
     for t in "${v[@]}"; do
-        [[ ${t} == sip || ${t} == web || ${t} == mysql ]] || die "${E_USAGE}" "--tests: valor invalido '${t}'"
+        [[ ${t} == sip || ${t} == web || ${t} == mysql || ${t} == options ]] || die "${E_USAGE}" "--tests: valor invalido '${t}'"
     done
+    if has_test options; then
+        has_test sip || die "${E_USAGE}" "--tests options so roda junto com sip (dentro da fase sip)"
+        is_uint "${OPT_OPTIONS_MAX}" && ((OPT_OPTIONS_MAX >= 1)) || die "${E_USAGE}" "--options-max obrigatorio (inteiro >= 1) com o teste options"
+        [[ -n ${OPT_OPTIONS_START} ]] || OPT_OPTIONS_START=$(( OPT_OPTIONS_MAX / 10 > 0 ? OPT_OPTIONS_MAX / 10 : 1 ))
+        is_uint "${OPT_OPTIONS_START}" && ((OPT_OPTIONS_START >= 1)) || die "${E_USAGE}" "--options-start invalido"
+        ((OPT_OPTIONS_START <= OPT_OPTIONS_MAX)) || OPT_OPTIONS_START=${OPT_OPTIONS_MAX}
+        [[ -n ${OPT_OPTIONS_STEP} ]] || OPT_OPTIONS_STEP=${OPT_OPTIONS_START}
+        is_uint "${OPT_OPTIONS_STEP}" && ((OPT_OPTIONS_STEP >= 1)) || die "${E_USAGE}" "--options-step invalido"
+        is_uint "${OPT_OPTIONS_INTERVAL}" && ((OPT_OPTIONS_INTERVAL >= 1)) || die "${E_USAGE}" "--options-interval minimo: 1 s"
+        is_uint "${OPT_OPTIONS_DELAY}" || die "${E_USAGE}" "--options-delay invalido"
+        ((OPT_OPTIONS_DELAY < OPT_WINDOW)) || die "${E_USAGE}" "--options-delay deve ser menor que --window"
+    fi
 
     if has_test sip; then
         is_uint "${OPT_CPS}" && ((OPT_CPS >= 1)) || die "${E_USAGE}" "--cps obrigatorio (inteiro >= 1) com o teste sip"
@@ -2134,6 +2379,13 @@ print_plan() {
         "${CFG[GUARD_MAX_WSREP_FC_PCT]}" "${CFG[GUARD_MIN_WSREP_CLUSTER_SIZE]}"
     printf '  limites opensips   memoria compartilhada, amostra ou maximo da execucao>%s%% (0=off)\n' "${CFG[GUARD_MAX_OS_SHM_PCT]}"
     printf '  limites banco      conexoes>%s%% (0=off)\n' "${CFG[GUARD_MAX_DB_CONN_PCT]}"
+    if has_test options; then
+        printf '  OPTIONS            %s/s -> %s/s (+%s a cada %s s), %s s apos o inicio da fase sip, de %s:%s\n' \
+            "${OPT_OPTIONS_START}" "${OPT_OPTIONS_MAX}" "${OPT_OPTIONS_STEP}" "${OPT_OPTIONS_INTERVAL}" \
+            "${OPT_OPTIONS_DELAY}" "${LOCAL_IP}" "${CFG[OPTIONS_LOCAL_PORT]}"
+        printf '  limites options    falha>%s%% resposta_media>%sms (0=off)\n' \
+            "${CFG[GUARD_MAX_OPTIONS_FAIL_PCT]}" "${CFG[GUARD_MAX_OPTIONS_RT_MS]}"
+    fi
     printf '  resultados         %s\n\n' "${RUN_DIR}"
 }
 
@@ -2150,6 +2402,10 @@ save_run_env() {
             printf 'janela_s=%s\nchamadas=%s\nhold_s=%s\nmidia=%s\nlimite_simultaneas=%s\n' \
                 "${OPT_WINDOW}" "${OPT_CALLS}" "${OPT_HOLD}" "${OPT_MEDIA}" "${OPT_LIMIT}"
             printf 'dids=%s\n' "${OPT_DID:-${DID_COUNT} de ${CFG[DID_FILE]}}"
+            if has_test options; then
+                printf 'options=%s -> %s/s (+%s/%ss, inicio +%ss) de %s:%s\n' "${OPT_OPTIONS_START}" "${OPT_OPTIONS_MAX}" \
+                    "${OPT_OPTIONS_STEP}" "${OPT_OPTIONS_INTERVAL}" "${OPT_OPTIONS_DELAY}" "${LOCAL_IP}" "${CFG[OPTIONS_LOCAL_PORT]}"
+            fi
             if uas_enabled; then
                 printf 'atendedor=%s:%s\n' "${LOCAL_IP}" "${CFG[UAS_PORT]}"
             else
@@ -2388,6 +2644,7 @@ cmd_run() {
     if has_test sip; then
         prepare_sip "${RUN_DIR}/sip" "${LOCAL_IP}"
         prepare_uas "${RUN_DIR}/uas" "${LOCAL_IP}" "${RUN_DIR}/sip/tone.al"
+        prepare_options "${RUN_DIR}/options" "${LOCAL_IP}"
     fi
 
     snapshot pre

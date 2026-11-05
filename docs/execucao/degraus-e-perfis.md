@@ -89,6 +89,7 @@ equivalem às opções do `run`).
 | `stfc-cps90-rtp-escada` | RTP G.711: escada de 30 a 90 CPS (+15 a cada 120 s), 3 min em 90, hold 10 s. Exige DIDs com `bypass_media = 1` | ~14 min | `150 1260` |
 | `stfc-cps90-rtp-30min` | RTP G.711: rampa de 45 a 90 CPS, 30 min em 90, hold 10 s. Exige DIDs com `bypass_media = 1` | ~38 min | `150 1260` |
 | `stfc-cps90-2h` | Sinalização: rampa de 45 a 90 CPS, 2 h em 90, hold 10 s | ~2h08 | `150 1260` |
+| `stfc-opensips-teto` | Teto do OpenSIPS: INVITE a 90 CPS e, a partir de 300 s, OPTIONS de 500 a 5000/s (+500 a cada 60 s), respondidos pelo próprio OpenSIPS. Para no primeiro guard de OPTIONS ou de CPU | ~20 min | `150 1260` |
 | `stfc-c1000` | 1000 simultâneas a 10 CPS (janela 150 s, hold 100 s) | ~9 min | — |
 | `stfc-c1000-rtp` | Igual ao `stfc-c1000`, com `MEDIA=rtp` (G.711 nos dois sentidos) | ~9 min | — |
 | `stfc-c2000` | 2000 simultâneas a 10 CPS (janela 320 s, hold 200 s, 120 s no patamar, `-l` 2448) | ~13 min | `150 2800` |
