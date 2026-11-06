@@ -80,7 +80,26 @@
 
   @RTP_ACTION@
 
-  <!-- Espera o hold; se o FS encerrar antes (queda do outro lado), responde o BYE. -->
+  <!--
+    Espera o hold; se o FS encerrar antes (queda do outro lado), responde o BYE.
+    Um 180/183 que chega depois do 200 (reordenacao, vista em 05/11 em ~1 de cada
+    6.000 chamadas) e descartado e a espera recomeca, como faz um UA real. Sem isso
+    o SIPp abortava a chamada com um BYE sem a rota do dialogo, o OpenSIPS
+    respondia 404 e a chamada ficava aberta no FS. A espera recomeca do zero, entao
+    o hold dessas chamadas cresce o atraso do 180 (dezenas de ms). Cada descarte
+    vira uma linha PROVISORIA_TARDIA no sip/actions.log.
+  -->
+  <label id="espera_bye"/>
+  <recv response="180" optional="true" timeout="@HOLD_MS@" ontimeout="local_bye" next="espera_bye">
+    <action>
+      <log message="PROVISORIA_TARDIA 180 [call_id]"/>
+    </action>
+  </recv>
+  <recv response="183" optional="true" next="espera_bye">
+    <action>
+      <log message="PROVISORIA_TARDIA 183 [call_id]"/>
+    </action>
+  </recv>
   <recv request="BYE" timeout="@HOLD_MS@" ontimeout="local_bye"/>
 
   <nop>

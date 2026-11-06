@@ -1507,6 +1507,8 @@ report_sip() {
     # LOCAL_BYE vem de uma acao <log> do cenario: o errors.log do SIPp nao registra
     # todos os "receive timeout ... jumping to label" (resume com "There were more errors")
     printf '  %-36s %s\n' "Encerradas pela VM (fim do hold)" "$(grep -c LOCAL_BYE "${dir}/sip/actions.log" 2>/dev/null || true)"
+    # 180/183 que chegou depois do 200: o cenario descarta e segue (nao e falha)
+    printf '  %-36s %s\n' "180/183 tardio descartado" "$(grep -c PROVISORIA_TARDIA "${dir}/sip/actions.log" 2>/dev/null || true)"
     printf '  %-36s %s\n' "Pico de chamadas simultaneas" "${mc}"
     local dlg
     dlg=$(metric_peak "${dir}/metrics/opensips.csv" os_active_dlg)
