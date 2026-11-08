@@ -17,7 +17,8 @@
 # consulta), mysql (SHOW GLOBAL STATUS, information_schema.processlist). Nao altera configuracao.
 # fs_cli e mysql usam a configuracao local do root (~/.fs_cli_conf, ~/.my.cnf): nenhuma senha na
 # linha de comando. Ctrl+C, TERM ou queda do SSH (HUP) encerram a coleta e geram o pacote assim mesmo.
-# Carga: um ciclo de comandos por intervalo; du a cada 5 amostras; find so no fim.
+# Carga: um ciclo de comandos por intervalo; du dos diretorios do FS a cada 5 amostras; du dos
+# pontos de montagem no inicio (em segundo plano) e no fim; find so no fim.
 #
 # Saida: /root/coleta-longa-<host>-<data>/ e o pacote /root/coleta-longa-<host>-<data>.tar.gz
 #   contexto-inicio.txt, contexto-fim.txt  versoes, uptime, memoria, disco, journald, limites do FS
@@ -29,7 +30,9 @@
 #   fs-dirs.tsv            MB dos diretorios do FreeSWITCH e do journal
 #   db.tsv                 contadores do SHOW GLOBAL STATUS
 #   db-conexoes.log        conexoes por usuario e origem
-#   arquivos-crescidos.txt arquivos e diretorios que mais cresceram durante a coleta
+#   arquivos-crescidos.txt crescimento do disco: uso por ponto de montagem, diretorios que mais
+#                          cresceram (du no inicio x no fim) e arquivos grandes alterados
+#   du-inicio.txt, du-fim.txt  du -xm ate 3 niveis por ponto de montagem local (base do crescimento)
 
 set -uo pipefail
 export LC_ALL=C
@@ -114,7 +117,7 @@ db_status() {
         END { n = split(vars, k, " "); for (i = 1; i <= n; i++) printf "%s%s", (i > 1 ? "\t" : ""), val[k[i]] }'
 }
 
-FS_DIRS="/var/lib/freeswitch/db /var/lib/freeswitch/recordings /var/lib/freeswitch/storage /var/log/freeswitch /var/log/journal"
+FS_DIRS="/var/lib/freeswitch/db /var/lib/freeswitch/recordings /var/lib/freeswitch/storage /var/log/freeswitch /var/log/nginx /var/log/journal"
 
 contexto() { # $1 = rotulo
     printf '== %s %s (%s)\n' "$1" "$(date '+%F %T')" "${HOST}"
@@ -159,6 +162,7 @@ printf 'epoch\thora\tservico\tprocessos\trss_kb\tpss_kb\thwm_kb_max\tthreads\tfd
 ((ROLE_DB)) && printf 'epoch\thora\t%s\n' "$(tr ' ' '\t' <<< "${DB_VARS}")" > "${OUT}/db.tsv"
 
 contexto inicio > "${OUT}/contexto-inicio.txt" 2>&1
+df -Pm -l -x tmpfs -x devtmpfs -x squashfs -x overlay > "${OUT}/.df-inicio" 2>/dev/null
 ((ROLE_OS)) && opensips_ctx inicio > "${OUT}/opensips-inicio.txt" 2>&1
 
 amostra() { # $1 = numero da amostra
@@ -203,22 +207,41 @@ amostra() { # $1 = numero da amostra
     fi
 }
 
-crescidos() { # arquivos e diretorios alterados desde o inicio da coleta, por ponto de montagem local
+montagens() { df -P -l -x tmpfs -x devtmpfs -x squashfs -x overlay 2>/dev/null | awk 'NR > 1 { print $6 }'; }
+
+du_snap() { # $1 = arquivo de saida: "MB<TAB>diretorio" ate 3 niveis, por ponto de montagem local
     local m
-    printf '== arquivos alterados desde %s, por ponto de montagem local\n' "$(date -r "${OUT}/.inicio" '+%F %T')"
-    for m in $(df -P -l -x tmpfs -x devtmpfs -x squashfs -x overlay 2>/dev/null | awk 'NR > 1 { print $6 }'); do
-        printf '\n== %s: arquivos acima de 10 MB (bytes, alteracao, caminho)\n' "${m}"
+    for m in $(montagens); do
+        timeout 600 du -xm --max-depth=3 "${m}" 2>/dev/null
+    done > "$1"
+}
+
+crescidos() { # crescimento do disco durante a coleta
+    local m
+    printf '== crescimento do disco entre %s e %s\n' "$(date -r "${OUT}/.inicio" '+%F %T')" "$(date '+%F %T')"
+    printf '\n== uso por ponto de montagem (MB usados no inicio, no fim, diferenca)\n'
+    awk 'NR == FNR { if (FNR > 1) u[$6] = $3; next } FNR > 1 && ($6 in u) { printf "%s\t%s\t%s\t%+d\n", $6, u[$6], $3, $3 - u[$6] }' \
+        "${OUT}/.df-inicio" <(df -Pm -l -x tmpfs -x devtmpfs -x squashfs -x overlay 2>/dev/null)
+    printf '\n== diretorios que mais cresceram (MB no inicio, no fim, diferenca; du ate 3 niveis)\n'
+    if [[ -s ${OUT}/du-inicio.txt && -s ${OUT}/du-fim.txt ]]; then
+        awk -F'\t' 'NR == FNR { a[$2] = $1; next } { d = $1 - a[$2]; if (d > 0) printf "%d\t%d\t%d\t%s\n", a[$2], $1, d, $2 }' \
+            "${OUT}/du-inicio.txt" "${OUT}/du-fim.txt" | sort -t$'\t' -k3,3nr | head -n 25
+    else
+        printf '(du do inicio ou do fim ausente)\n'
+    fi
+    for m in $(montagens); do
+        printf '\n== %s: arquivos acima de 10 MB alterados durante a coleta (tamanho atual, nao o crescimento)\n' "${m}"
         timeout 300 find "${m}" -xdev -type f -newer "${OUT}/.inicio" -size +10M -printf '%s\t%TY-%Tm-%Td %TH:%TM\t%p\n' 2>/dev/null \
             | grep -v "${OUT}" | sort -rn | head -n 30
-        printf '\n== %s: diretorios com mais bytes em arquivos alterados (MB, arquivos, diretorio)\n' "${m}"
-        timeout 300 find "${m}" -xdev -type f -newer "${OUT}/.inicio" -printf '%s %h\n' 2>/dev/null | grep -v "${OUT}" \
-            | awk '{ d = $2; for (i = 3; i <= NF; i++) d = d " " $i; b[d] += $1; n[d]++ }
-                   END { for (d in b) printf "%.1f\t%d\t%s\n", b[d] / 1048576, n[d], d }' | sort -rn | head -n 20
     done
 }
 
 PARAR=0
 trap 'PARAR=1' INT TERM HUP
+
+# Base do crescimento do disco, em segundo plano para nao atrasar a primeira amostra
+du_snap "${OUT}/du-inicio.txt" &
+DU_PID=$!
 
 printf 'coletando %ss a cada %ss em %s (opensips=%s freeswitch=%s mysqld=%s)\n' "${DUR}" "${INT}" "${OUT}" "${ROLE_OS}" "${ROLE_FS}" "${ROLE_DB}"
 fim=$((SECONDS + DUR)); n=0
@@ -232,9 +255,11 @@ done
 trap '' INT TERM HUP
 
 ((PARAR)) && printf 'interrompido na amostra %s: fechando o pacote\n' "${n}"
-printf 'finalizando: contexto e busca de arquivos alterados (ate alguns minutos)\n'
+printf 'finalizando: contexto, du e busca de arquivos alterados (ate alguns minutos)\n'
 contexto fim > "${OUT}/contexto-fim.txt" 2>&1
 ((ROLE_OS)) && opensips_ctx fim > "${OUT}/opensips-fim.txt" 2>&1
+wait "${DU_PID}" 2>/dev/null
+du_snap "${OUT}/du-fim.txt"
 crescidos > "${OUT}/arquivos-crescidos.txt" 2>&1
 [[ -s ${OUT}/erros.log ]] || rm -f "${OUT}/erros.log"
 
